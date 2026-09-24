@@ -1,0 +1,2 @@
+# smart-life-manager
+Project
