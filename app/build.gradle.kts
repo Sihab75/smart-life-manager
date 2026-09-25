@@ -40,7 +40,7 @@ android {
         buildConfig = true
     }
     val assistantBaseUrl = providers.gradleProperty("ASSISTANT_BASE_URL")
-        .orElse("http://127.0.0.1:3000")
+        .orElse("http://10.0.2.2:3000")
     defaultConfig {
         buildConfigField("String", "ASSISTANT_BASE_URL", "\"${assistantBaseUrl.get()}\"")
     }
@@ -74,6 +74,15 @@ dependencies {
 
     // Coil Image Loading
     implementation(libs.coil.compose)
+
+    // Firebase cloud sync and authentication
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation(libs.firebase.firestore)
+    implementation(libs.firebase.storage)
+    implementation(libs.firebase.messaging)
+    implementation(libs.play.services.auth)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
