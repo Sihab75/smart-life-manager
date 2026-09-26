@@ -292,6 +292,8 @@ npm start               # listens on PORT (default 3000)
 
 For the Android emulator, the default `http://10.0.2.2:3000` already points at this local server. Deploy the backend to any Node-compatible host for real devices, and point `ASSISTANT_BASE_URL` at its HTTPS URL.
 
+Both AI endpoints require a Firebase ID token and the API applies an in-memory limit of 20 requests per IP per minute. Sign in or create an account from **Settings** in the Android app. The backend needs `FIREBASE_PROJECT_ID` and Firebase Admin Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` may point to a securely mounted service-account file); never commit service-account credentials. Set `TRUST_PROXY_HOPS` to the exact number of trusted reverse proxies in front of the backend (for example, `1` behind one trusted proxy), or leave it at `0` for direct connections. The rate limit is per server process; use a shared rate limiter when horizontally scaling.
+
 ---
 
 ## Firebase Setup
@@ -303,6 +305,7 @@ The Android app includes Firebase Authentication, Google credential sign-in, Fir
 3. Create **Firestore** and **Storage**, then add security rules restricting documents/files to the authenticated user's UID.
 4. Download `google-services.json` and place it at `app/google-services.json`.
 5. Configure the Firebase project's SHA-1 / SHA-256 fingerprints for Google Sign-In.
+6. Set `FIREBASE_PROJECT_ID` and secure Firebase Admin credentials on the backend host so it can verify app ID tokens.
 
 `FirebaseCloudService` safely reports a configuration error until `google-services.json` is present, so debug builds run before Firebase is configured.
 
@@ -320,12 +323,7 @@ The Android app includes Firebase Authentication, Google credential sign-in, Fir
 
 ## Testing
 
-The project currently ships with the **default Android Studio project templates**:
-
-- `app/src/test/.../ExampleUnitTest.kt` — a placeholder local unit test
-- `app/src/androidTest/.../ExampleInstrumentedTest.kt` — a placeholder instrumented test verifying the application package name
-
-No feature-specific automated test coverage exists yet; verification has been manual.
+Local unit tests cover schedule parsing/conflicts, calendar-period date ranges, and productivity calculator edge cases. The Android instrumented test remains the default package-name smoke test. Firebase-backed sign-in and API token verification require project credentials and are not exercised by the local automated tests.
 
 ---
 

@@ -7,11 +7,19 @@ import com.example.personal_financestudydaily_routine_assistant.data.database.*
 import com.example.personal_financestudydaily_routine_assistant.data.cloud.CloudUser
 import com.example.personal_financestudydaily_routine_assistant.data.cloud.FirebaseCloudService
 import com.example.personal_financestudydaily_routine_assistant.data.broadcast.BroadcastService
+import androidx.room.withTransaction
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
@@ -19,28 +27,55 @@ import java.util.concurrent.TimeUnit
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.Calendar
 
+private fun currentDateString(): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+
+private fun currentMonthString(): String =
+    SimpleDateFormat("MM-yyyy", Locale.getDefault()).format(Date())
+
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val db = AppDatabase.getDatabase(application)
-    private val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-    private val month = SimpleDateFormat("MM-yyyy", Locale.getDefault()).format(Date())
-    private val monthDatePrefix = SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(Date())
+    private val currentDate = flow {
+        while (true) {
+            val now = Calendar.getInstance()
+            emit(SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now.time))
+            val nextDay = (now.clone() as Calendar).apply {
+                add(Calendar.DAY_OF_YEAR, 1)
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            delay((nextDay.timeInMillis - System.currentTimeMillis()).coerceAtLeast(1L))
+        }
+    }.distinctUntilChanged().stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        currentDateString()
+    )
+    private val currentMonth = currentDate.map { it.take(7) }.distinctUntilChanged()
     private val workManager = WorkManager.getInstance(application)
     private val cloud = FirebaseCloudService(application)
-    private val broadcastService = BroadcastService(db.broadcastDao(), db.notificationDao())
+    private val broadcastService = BroadcastService(db.broadcastDao())
     private val _cloudUser = MutableStateFlow(cloud.currentUser)
     val cloudUser: StateFlow<CloudUser?> = _cloudUser
 
     val settings: Flow<UserSettingsEntity?> = db.userSettingsDao().getUserSettings()
     val expenses: Flow<List<ExpenseEntity>> = db.expenseDao().getAllExpenses()
-    val todayExpenses: Flow<List<ExpenseEntity>> = db.expenseDao().getExpensesByDate(today)
-    val todayExpenseTotal: Flow<Double?> = db.expenseDao().getDailyTotal(today)
-    val monthExpenseTotal: Flow<Double?> = db.expenseDao().getMonthlyTotal("$monthDatePrefix-%")
+    val todayExpenses: Flow<List<ExpenseEntity>> = currentDate.flatMapLatest(db.expenseDao()::getExpensesByDate)
+    val todayExpenseTotal: Flow<Double?> = currentDate.flatMapLatest(db.expenseDao()::getDailyTotal)
+    val monthExpenseTotal: Flow<Double?> = currentMonth.flatMapLatest { month ->
+        db.expenseDao().getMonthlyTotal("$month-%")
+    }
     val studySessions: Flow<List<StudySessionEntity>> = db.studySessionDao().getAllStudySessions()
-    val todayStudyMinutes: Flow<Int?> = db.studySessionDao().getDailyStudyDurationMinutes(today)
-    val todayGoal: Flow<StudyGoalEntity?> = db.studyGoalDao().getStudyGoalForDate(today)
+    val todayStudyMinutes: Flow<Int?> = currentDate.flatMapLatest(db.studySessionDao()::getDailyStudyDurationMinutes)
+    val todayGoal: Flow<StudyGoalEntity?> = currentDate.flatMapLatest(db.studyGoalDao()::getStudyGoalForDate)
     val tasks: Flow<List<TaskEntity>> = db.taskDao().getAllTasks()
-    val todayRoutines: Flow<List<DailyRoutineEntity>> = db.dailyRoutineDao().getRoutinesForDate(today)
+    val todayRoutines: Flow<List<DailyRoutineEntity>> = currentDate.flatMapLatest(db.dailyRoutineDao()::getRoutinesForDate)
+    val dailyRoutines: Flow<List<DailyRoutineEntity>> = db.dailyRoutineDao().getAllRoutines()
     val classes: Flow<List<ClassEntity>> = db.classDao().getAllClasses()
     val weeklyGoals: Flow<List<WeeklyGoalEntity>> = db.weeklyGoalDao().getAllWeeklyGoals()
     val reports: Flow<List<DailyReportEntity>> = db.dailyReportDao().getAllDailyReports()
@@ -49,7 +84,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val archivedAssistantConversations: Flow<List<AssistantConversationEntity>> = db.assistantConversationDao().getArchivedConversations()
     fun assistantMessages(conversationId: Long): Flow<List<AssistantMessageEntity>> = db.assistantMessageDao().getMessages(conversationId)
     val categories: Flow<List<CategoryEntity>> = db.categoryDao().getAllCategories()
-    val budgets: Flow<List<BudgetEntity>> = db.budgetDao().getBudgetsForMonth(month)
+    val budgets: Flow<List<BudgetEntity>> = currentMonth.flatMapLatest { month ->
+        db.budgetDao().getBudgetsForMonth("${month.substring(5, 7)}-${month.substring(0, 4)}")
+    }
     val savingsGoals: Flow<List<SavingsGoalEntity>> = db.savingsGoalDao().getAllGoals()
     val recurringExpenses: Flow<List<RecurringExpenseEntity>> = db.recurringExpenseDao().getActiveExpenses()
     val cpProblems: Flow<List<CpProblemEntity>> = db.cpProblemDao().getAllProblems()
@@ -154,7 +191,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addStudyFlashcard(courseId: Long, front: String, back: String) = viewModelScope.launch {
         db.studyManagementDao().insertFlashcard(
-            StudyFlashcardEntity(courseId = courseId, front = front.trim(), back = back.trim(), nextReviewDate = today)
+            StudyFlashcardEntity(courseId = courseId, front = front.trim(), back = back.trim(), nextReviewDate = currentDateString())
         )
     }
 
@@ -174,7 +211,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         db.academicDao().updateSemester(semester.copy(isArchived = true))
     }
 
-    fun addAcademicClass(item: AcademicClassEntity) = viewModelScope.launch { db.academicDao().insertClass(item) }
+    fun addAcademicClass(
+        item: AcademicClassEntity,
+        onConflict: (List<AcademicClassEntity>) -> Unit = {},
+        onSaved: () -> Unit = {}
+    ) = viewModelScope.launch {
+        val conflicts = detectScheduleConflicts(db.academicDao().getAllClassesOnce() + item).filter { it.first.id == item.id || it.second.id == item.id }
+        if (conflicts.isEmpty()) {
+            db.academicDao().insertClass(item.copy(reminderMinutes = item.reminderMinutes.coerceAtLeast(0)))
+            onSaved()
+        } else {
+            onConflict(conflicts.map { if (it.first.id == item.id) it.second else it.first }.distinctBy { it.id })
+        }
+    }
+    fun updateAcademicClass(item: AcademicClassEntity, saveAnyway: Boolean = false, onConflict: (List<AcademicClassEntity>) -> Unit = {}) = viewModelScope.launch {
+        val others = db.academicDao().getAllClassesOnce().filter { it.id != item.id }
+        val conflicts = detectScheduleConflicts(others + item).filter { it.first.id == item.id || it.second.id == item.id }
+        if (saveAnyway || conflicts.isEmpty()) db.academicDao().updateClass(item.copy(reminderMinutes = item.reminderMinutes.coerceAtLeast(0)))
+        else onConflict(conflicts.map { if (it.first.id == item.id) it.second else it.first }.distinctBy { it.id })
+    }
     fun deleteAcademicClass(item: AcademicClassEntity) = viewModelScope.launch { db.academicDao().deleteClass(item) }
     fun addAcademicExam(item: AcademicExamEntity) = viewModelScope.launch { db.academicDao().insertExam(item) }
     fun deleteAcademicExam(item: AcademicExamEntity) = viewModelScope.launch { db.academicDao().deleteExam(item) }
@@ -234,6 +289,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _cloudUser.value = null
     }
 
+    suspend fun assistantIdToken(): String? = cloud.assistantIdToken()
+
     suspend fun uploadCloudFile(path: String, uri: android.net.Uri): Result<String> =
         cloud.uploadFile(path, uri)
 
@@ -288,12 +345,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) = viewModelScope.launch {
         require(amount.isFinite() && amount > 0.0) { "Expense amount must be greater than zero." }
         require(category.isNotBlank()) { "Expense category is required." }
-        db.expenseDao().insertExpense(
-            ExpenseEntity(
+        val date = currentDateString()
+        val expense = ExpenseEntity(
                 amount = amount,
                 category = category,
                 dateMillis = System.currentTimeMillis(),
-                dateString = today,
+                dateString = date,
                 timeString = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date()),
                 note = note,
                 paymentMethod = paymentMethod,
@@ -302,32 +359,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isRecurring = isRecurring,
                 recurrenceRule = recurrenceRule
             )
-        )
-        if (isRecurring) {
-            db.recurringExpenseDao().insertExpense(
-                RecurringExpenseEntity(
-                    title = note.ifBlank { "$category expense" },
-                    amount = amount,
-                    category = category,
-                    ledger = ledger,
-                    frequency = recurrenceRule.ifBlank { "Monthly" },
-                    nextDueDate = today
+        db.withTransaction {
+            db.expenseDao().insertExpense(expense)
+            if (isRecurring) {
+                db.recurringExpenseDao().insertExpense(
+                    RecurringExpenseEntity(
+                        title = note.ifBlank { "$category expense" },
+                        amount = amount,
+                        category = category,
+                        ledger = ledger,
+                        frequency = recurrenceRule.ifBlank { "Monthly" },
+                        nextDueDate = date
+                    )
                 )
-            )
+            }
         }
     }
 
     fun addCategory(name: String, parentName: String = "") = viewModelScope.launch {
+        require(name.isNotBlank()) { "Category name is required." }
         db.categoryDao().insertCategories(
             listOf(CategoryEntity(name = name.trim(), parentName = parentName.trim(), iconName = "label", colorHex = "#607D8B", isDefault = false))
         )
     }
 
-    fun saveBudget(category: String, amount: Double, period: String = month) = viewModelScope.launch {
-        db.budgetDao().insertOrUpdateBudget(BudgetEntity(category = category, amount = amount, monthYear = period))
+    fun saveBudget(category: String, amount: Double, period: String = currentMonthString()) = viewModelScope.launch {
+        require(category.isNotBlank()) { "Budget category is required." }
+        require(amount.isFinite() && amount > 0.0) { "Budget must be greater than zero." }
+        db.withTransaction {
+            db.budgetDao().insertOrUpdateBudget(BudgetEntity(category = category, amount = amount, monthYear = period))
+            if (category == "Monthly") {
+                val settings = db.userSettingsDao().getUserSettingsDirect() ?: UserSettingsEntity()
+                db.userSettingsDao().updateUserSettings(settings.copy(monthlyBudgetAmount = amount))
+            }
+        }
     }
 
     fun addSavingsGoal(name: String, targetAmount: Double) = viewModelScope.launch {
+        require(name.isNotBlank()) { "Savings goal name is required." }
+        require(targetAmount.isFinite() && targetAmount > 0.0) { "Savings goal target must be greater than zero." }
         db.savingsGoalDao().insertGoal(SavingsGoalEntity(name = name.trim(), targetAmount = targetAmount))
     }
 
@@ -338,6 +408,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteSavingsGoal(goal: SavingsGoalEntity) = viewModelScope.launch { db.savingsGoalDao().deleteGoal(goal) }
 
     fun addRecurringExpense(title: String, amount: Double, category: String, ledger: String, frequency: String) = viewModelScope.launch {
+        require(title.isNotBlank() && category.isNotBlank()) { "Recurring expense title and category are required." }
+        require(amount.isFinite() && amount > 0.0) { "Recurring expense amount must be greater than zero." }
         db.recurringExpenseDao().insertExpense(
             RecurringExpenseEntity(
                 title = title.trim(), amount = amount, category = category.trim(),
@@ -355,7 +427,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val end = System.currentTimeMillis()
         db.studySessionDao().insertStudySession(
             StudySessionEntity(subject = subject, durationMinutes = minutes, notes = notes,
-                startTimestamp = end - minutes * 60_000L, endTimestamp = end, dateString = today)
+                startTimestamp = end - minutes * 60_000L, endTimestamp = end, dateString = currentDateString())
         )
     }
 
@@ -365,6 +437,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addTask(title: String, description: String, priority: String) = viewModelScope.launch {
         require(title.isNotBlank()) { "Task title is required." }
+        require(priority in setOf("High", "Medium", "Low")) { "Choose a valid task priority." }
         db.taskDao().insertTask(
             TaskEntity(
                 title = title,
@@ -378,8 +451,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteTask(task: TaskEntity) = viewModelScope.launch { db.taskDao().deleteTask(task) }
 
     fun setTodayStudyGoal(hours: Double) = viewModelScope.launch {
+        require(hours.isFinite() && hours > 0.0) { "Study goal must be greater than zero." }
         db.studyGoalDao().insertOrUpdateStudyGoal(
-            StudyGoalEntity(targetHours = hours, dateString = today)
+            StudyGoalEntity(targetHours = hours, dateString = currentDateString())
         )
     }
 
@@ -418,6 +492,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addHabit(name: String, category: String, reminderEnabled: Boolean, reminderTime: String) = viewModelScope.launch {
+        require(name.isNotBlank()) { "Habit name is required." }
         db.habitDao().insertHabit(
             HabitEntity(
                 name = name.trim(),

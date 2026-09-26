@@ -18,23 +18,22 @@ object ProductivityCalculator {
         totalRoutines: Int,
         completedRoutines: Int
     ): ProductivityBreakdown {
-        // Study score
-        val studyPercent = if (targetStudyMinutes > 0) {
-            ((actualStudyMinutes.toDouble() / targetStudyMinutes.toDouble()) * 100).coerceAtMost(100.0).toInt()
+        val safeTargetMinutes = targetStudyMinutes.coerceAtLeast(0)
+        val safeActualMinutes = actualStudyMinutes.coerceAtLeast(0)
+        val studyPercent = if (safeTargetMinutes > 0) {
+            ((safeActualMinutes.toDouble() / safeTargetMinutes.toDouble()) * 100).coerceIn(0.0, 100.0).toInt()
         } else {
-            if (actualStudyMinutes > 0) 100 else 80
+            if (safeActualMinutes > 0) 100 else 80
         }
 
-        // Task score
         val taskPercent = if (totalTasks > 0) {
-            ((completedTasks.toDouble() / totalTasks.toDouble()) * 100).toInt()
+            ((completedTasks.coerceIn(0, totalTasks).toDouble() / totalTasks.toDouble()) * 100).toInt()
         } else {
             100
         }
 
-        // Routine score
         val routinePercent = if (totalRoutines > 0) {
-            ((completedRoutines.toDouble() / totalRoutines.toDouble()) * 100).toInt()
+            ((completedRoutines.coerceIn(0, totalRoutines).toDouble() / totalRoutines.toDouble()) * 100).toInt()
         } else {
             100
         }

@@ -70,13 +70,13 @@ import java.util.Locale
 internal fun CalendarScreen(vm: MainViewModel) {
     val legacyClasses by vm.classes.collectAsState(initial = emptyList())
     val academicClasses by vm.academicClasses.collectAsState(initial = emptyList())
-    val routines by vm.todayRoutines.collectAsState(initial = emptyList())
+    val routines by vm.dailyRoutines.collectAsState(initial = emptyList())
     val items = remember(legacyClasses, academicClasses, routines) {
         (legacyClasses.map(::toRoutineItem) + academicClasses.map(::toRoutineItem)).let { classes ->
             classes + routines.map(::toRoutineItem)
         }
     }
-    val now = remember { mutableStateOf(System.currentTimeMillis()) }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
     var weekOffset by rememberSaveable { mutableIntStateOf(0) }
     var selectedDay by rememberSaveable { mutableIntStateOf(Calendar.getInstance().get(Calendar.DAY_OF_WEEK) - 1) }
     val weekStart = remember(weekOffset) {
@@ -85,7 +85,7 @@ internal fun CalendarScreen(vm: MainViewModel) {
             add(Calendar.WEEK_OF_YEAR, weekOffset)
         }.time
     }
-    val todayKey = routineDateKey(Date(now.value))
+    val todayKey = routineDateKey(Date(now))
     val weekDays = remember(weekStart) { routineDayNames.mapIndexed { index, day -> day to dateForRoutineDay(weekStart, index) } }
     val dayRequesters = remember { List(7) { BringIntoViewRequester() } }
     val classesThisWeek = weekDays.flatMap { (day, date) ->
@@ -94,7 +94,7 @@ internal fun CalendarScreen(vm: MainViewModel) {
     }
     LaunchedEffect(Unit) {
         while (true) {
-            now.value = System.currentTimeMillis()
+            now = System.currentTimeMillis()
             kotlinx.coroutines.delay(30_000)
         }
     }
@@ -122,22 +122,22 @@ internal fun CalendarScreen(vm: MainViewModel) {
             todayKey = todayKey,
             onDaySelected = { selectedDay = it }
         )
-        NextClassCard(items, now.value)
+        NextClassCard(items, now)
         WeekSummary(classesThisWeek.map { it.second })
         AnimatedContent(
-            targetState = weekOffset,
+            targetState = weekDays,
             transitionSpec = { fadeIn() togetherWith fadeOut() },
             label = "week transition"
-        ) {
+        ) { days ->
             Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                weekDays.forEachIndexed { index, (day, date) ->
+                days.forEachIndexed { index, (day, date) ->
                     val dayItems = sortRoutineItems(items.filter { it.dayOfWeek.equals(day.second, ignoreCase = true) && it.matchesDate(date) })
                     DaySection(
                         dayName = day.second,
                         date = date,
                         items = dayItems,
                         isToday = routineDateKey(date) == todayKey,
-                        nowMillis = now.value,
+                        nowMillis = now,
                         bringIntoViewRequester = dayRequesters[index],
                         onDelete = { item ->
                             if (item.isDailyRoutine) {
@@ -251,20 +251,22 @@ private fun DaySelector(
 
 @Composable
 private fun NextClassCard(items: List<RoutineItem>, nowMillis: Long) {
-    val next = findNextRoutine(items, nowMillis)
+    val next = scheduleStatus(items, nowMillis)
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
         shape = RoundedCornerShape(22.dp)
     ) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(if (next?.isNow == true) "CURRENT CLASS" else "NEXT CLASS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-            if (next == null) {
-                Text("No upcoming classes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(if (next.state == ScheduleState.CURRENT) "LIVE NOW" else "NEXT CLASS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            if (next.item == null) {
+                Text(if (next.state == ScheduleState.COMPLETED) "No more classes today 🎉" else "No upcoming classes", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text("Your schedule is clear for now.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                Text("${next.item.courseCode} · ${next.item.courseName}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("${formatRoutineTime(next.item.startTime)} - ${formatRoutineTime(next.item.endTime)}${next.item.roomLabel()?.let { " · $it" } ?: ""}")
-                Text(if (next.isNow) "Ends in ${formatRelativeMinutes(next.remainingMinutes)}" else "Starts in ${formatRelativeMinutes(next.minutesAway)}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                val item = next.item
+                Text("${item.courseCode} · ${item.courseName}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("${formatRoutineTime(item.startTime)} - ${formatRoutineTime(item.endTime)}")
+                routineLocationLabel(item)?.let { Text("📍 $it") }
+                Text(if (next.state == ScheduleState.CURRENT) "Ends in ${formatScheduleCountdown(next.minutes)}" else "Starts in ${formatScheduleCountdown(next.minutes)}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -389,49 +391,17 @@ private enum class RoutineStatus(val label: String) {
 }
 
 private fun classStatus(item: RoutineItem, date: Date, nowMillis: Long): RoutineStatus {
-    val today = routineDateKey(Date(nowMillis))
-    val dateKey = routineDateKey(date)
-    if (dateKey < today) return RoutineStatus.COMPLETED
-    if (dateKey > today) return RoutineStatus.UPCOMING
-    val start = parseRoutineTime(item.startTime) ?: return RoutineStatus.UPCOMING
-    val end = parseRoutineTime(item.endTime) ?: return if (start > Calendar.getInstance().get(Calendar.HOUR_OF_DAY) * 60 + Calendar.getInstance().get(Calendar.MINUTE)) RoutineStatus.UPCOMING else RoutineStatus.COMPLETED
-    val minute = Calendar.getInstance().apply { timeInMillis = nowMillis }.let { it.get(Calendar.HOUR_OF_DAY) * 60 + it.get(Calendar.MINUTE) }
-    return when {
-        minute in start until end -> RoutineStatus.NOW
-        minute >= end -> RoutineStatus.COMPLETED
+    return when (routineItemStatus(item, date.time, nowMillis)) {
+        ScheduleState.CURRENT -> RoutineStatus.NOW
+        ScheduleState.COMPLETED -> RoutineStatus.COMPLETED
         else -> RoutineStatus.UPCOMING
     }
 }
 
-private data class NextRoutine(val item: RoutineItem, val minutesAway: Int, val remainingMinutes: Int, val isNow: Boolean)
-
-private fun findNextRoutine(items: List<RoutineItem>, nowMillis: Long): NextRoutine? {
-    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
-    val todayIndex = calendar.get(Calendar.DAY_OF_WEEK) - 1
-    val nowMinutes = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
-    return (0..6).asSequence().flatMap { offset ->
-        val dayIndex = (todayIndex + offset) % 7
-        val dayName = routineDayNames[dayIndex].second
-        sortRoutineItems(items.filter { it.dayOfWeek.equals(dayName, ignoreCase = true) }).asSequence().mapNotNull { item ->
-            val start = parseRoutineTime(item.startTime) ?: return@mapNotNull null
-            val end = parseRoutineTime(item.endTime) ?: return@mapNotNull null
-            val startDelta = offset * 1440 + start - nowMinutes
-            val endDelta = offset * 1440 + (if (end >= start) end else end + 1440) - nowMinutes
-            if (offset == 0 && endDelta > 0 && startDelta <= 0) NextRoutine(item, 0, endDelta, true)
-            else if (startDelta >= 0) NextRoutine(item, startDelta, 0, false)
-            else null
-        }
-    }.minWithOrNull(compareBy<NextRoutine> { it.isNow.not() }.thenBy { if (it.isNow) 0 else it.minutesAway })
-}
-
-private fun formatRelativeMinutes(minutes: Int): String =
-    if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "$minutes min"
-
-private fun RoutineItem.roomLabel(): String? =
-    listOf(room, building).firstOrNull { it.isNotBlank() }?.trim()
+private fun RoutineItem.roomLabel(): String? = routineLocationLabel(this)
 
 private fun toRoutineItem(item: ClassEntity) = RoutineItem(item.id, item.courseCode, item.courseName, item.teacher, item.room, "", item.dayOfWeek, item.startTime, item.endTime, "Class", false)
-private fun toRoutineItem(item: AcademicClassEntity) = RoutineItem(item.id, item.courseCode, item.courseName, item.teacher, item.room, item.building, item.dayOfWeek, item.startTime, item.endTime, item.kind, true)
+private fun toRoutineItem(item: AcademicClassEntity) = RoutineItem(item.id, item.courseCode, item.courseName, item.teacher, item.room, item.building, item.dayOfWeek, item.startTime, item.endTime, item.kind, true, academicClass = item)
 private fun toRoutineItem(item: DailyRoutineEntity): RoutineItem {
     val date = runCatching { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(item.dateString) }.getOrNull()
     val day = date?.let { SimpleDateFormat("EEEE", Locale.getDefault()).format(it) } ?: item.dateString
@@ -442,7 +412,21 @@ private fun RoutineItem.matchesDate(date: Date): Boolean =
     specificDate == null || specificDate == routineDateKey(date)
 
 private fun RoutineItem.toLegacyClass() = ClassEntity(id, courseName, courseCode, teacher, room, dayOfWeek, startTime, endTime)
-private fun RoutineItem.toAcademicClass() = AcademicClassEntity(0, id, courseCode, courseName, teacher, "", dayOfWeek, startTime, endTime, room, building, kind)
+private fun RoutineItem.toAcademicClass(): AcademicClassEntity =
+    academicClass ?: AcademicClassEntity(
+        id = id,
+        semesterId = 0L,
+        courseCode = courseCode,
+        courseName = courseName,
+        teacher = teacher,
+        section = "",
+        dayOfWeek = dayOfWeek,
+        startTime = startTime,
+        endTime = endTime,
+        room = room,
+        building = building,
+        kind = kind
+    )
 private fun RoutineItem.toDailyRoutine() = DailyRoutineEntity(id, courseName, startTime, endTime, kind, dateString = specificDate ?: routineDateKey(Date()))
 
 @Composable

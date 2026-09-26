@@ -34,6 +34,9 @@ class FirebaseCloudService(context: Context) {
     val currentUser: CloudUser?
         get() = auth?.currentUser?.toCloudUser()
 
+    suspend fun assistantIdToken(): String? =
+        auth?.currentUser?.getIdToken(false)?.await()?.token
+
     suspend fun signInWithGoogle(account: GoogleSignInAccount): Result<CloudUser> =
         runCatching {
             val firebaseAuth = auth ?: error("Firebase is not configured. Add google-services.json.")

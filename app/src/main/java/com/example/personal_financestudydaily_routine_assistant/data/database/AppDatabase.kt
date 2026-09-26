@@ -51,7 +51,7 @@ import java.util.Locale
         ,HabitEntity::class, HabitCompletionEntity::class
         ,DocumentEntity::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -111,6 +111,7 @@ abstract class AppDatabase : RoomDatabase() {
                     .addMigrations(MIGRATION_11_12)
                     .addMigrations(MIGRATION_12_13)
                     .addMigrations(MIGRATION_13_14)
+                    .addMigrations(MIGRATION_14_15)
                     .build()
                 INSTANCE = instance
                 instance
@@ -277,12 +278,33 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "DELETE FROM budgets WHERE id NOT IN " +
+                        "(SELECT MAX(id) FROM budgets GROUP BY category, monthYear)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_budgets_category_monthYear " +
+                        "ON budgets (category, monthYear)"
+                )
+                db.execSQL(
+                    "DELETE FROM study_goals WHERE id NOT IN " +
+                        "(SELECT MAX(id) FROM study_goals GROUP BY dateString)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_study_goals_dateString " +
+                        "ON study_goals (dateString)"
+                )
+            }
+        }
+
         suspend fun seedDefaultData(db: AppDatabase) {
             // Seed User Settings
             db.userSettingsDao().updateUserSettings(
                 UserSettingsEntity(
                     id = 1,
-                    userName = "Md. Korimul Jaman",
+                    userName = "Your name",
                     currencySymbol = "৳",
                     monthlyBudgetAmount = 15000.0,
                     darkModeOption = "System",

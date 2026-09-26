@@ -133,6 +133,9 @@ private fun calendarDays(month: Calendar): List<Calendar?> {
 }
 private fun currentStreak(habitId: Long, completed: Set<Pair<String, Long>>): Int {
     val cursor = Calendar.getInstance()
+    if (!completed.contains(formatDate(cursor) to habitId)) {
+        cursor.add(Calendar.DAY_OF_YEAR, -1)
+    }
     var streak = 0
     while (completed.contains(formatDate(cursor) to habitId)) { streak++; cursor.add(Calendar.DAY_OF_YEAR, -1) }
     return streak

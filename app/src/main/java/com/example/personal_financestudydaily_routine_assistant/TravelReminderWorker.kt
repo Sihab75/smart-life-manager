@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 
@@ -15,12 +16,20 @@ class TravelReminderWorker(appContext: Context, workerParams: WorkerParameters) 
 
     override suspend fun doWork(): Result {
         val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Travel reminders", NotificationManager.IMPORTANCE_HIGH)
-        )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Travel reminders", NotificationManager.IMPORTANCE_HIGH)
+            )
+        }
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
-            applicationContext.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
         ) return Result.success()
+        if (!NotificationManagerCompat.from(applicationContext).areNotificationsEnabled()) {
+            return Result.success()
+        }
         val title = inputData.getString(TRIP_TITLE) ?: "Upcoming journey"
         val route = inputData.getString(ROUTE) ?: "Your saved trip"
         val departure = inputData.getString(DEPARTURE_TIME) ?: ""
@@ -28,11 +37,15 @@ class TravelReminderWorker(appContext: Context, workerParams: WorkerParameters) 
             .setSmallIcon(android.R.drawable.ic_dialog_map)
             .setContentTitle("Travel reminder · $title")
             .setContentText("$route · $departure")
-            .setStyle(NotificationCompat.BigTextStyle().bigText("Your journey is tomorrow. $route · Departure $departure"))
+            .setStyle(NotificationCompat.BigTextStyle().bigText("Your journey is coming up. $route · Departure $departure"))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(applicationContext).notify(title.hashCode(), notification)
+        try {
+            NotificationManagerCompat.from(applicationContext).notify(title.hashCode(), notification)
+        } catch (_: SecurityException) {
+            return Result.success()
+        }
         return Result.success()
     }
 

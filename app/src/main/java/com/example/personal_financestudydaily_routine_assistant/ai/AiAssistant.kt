@@ -177,7 +177,8 @@ class LocalAiAssistant : AiAssistant {
 
 class OnlineAiAssistant(
     private val baseUrl: String = BuildConfig.ASSISTANT_BASE_URL,
-    private val fallback: AiAssistant = LocalAiAssistant()
+    private val fallback: AiAssistant = LocalAiAssistant(),
+    private val idTokenProvider: suspend () -> String?
 ) {
     suspend fun documentAction(
         action: String,
@@ -186,12 +187,17 @@ class OnlineAiAssistant(
         provider: AiProvider = AiProvider.GEMINI
     ): String = withContext(Dispatchers.IO) {
         try {
+            val idToken = idTokenProvider()
+            if (idToken.isNullOrBlank()) {
+                return@withContext "Sign in with your Firebase account in Settings to use online document assistance."
+            }
             val connection = (URL("$baseUrl/api/document/action").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 8_000
                 readTimeout = 30_000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Authorization", "Bearer $idToken")
             }
             val payload = JSONObject()
                 .put("action", action)
@@ -202,6 +208,12 @@ class OnlineAiAssistant(
             val responseCode = connection.responseCode
             val body = (if (responseCode in 200..299) connection.inputStream else connection.errorStream)
                 .bufferedReader().use { it.readText() }
+            if (responseCode == 401) {
+                return@withContext "Your Firebase session is invalid. Sign in again in Settings to use online document assistance."
+            }
+            if (responseCode == 503) {
+                return@withContext "Online assistance is not configured on the Firebase server yet."
+            }
             if (responseCode !in 200..299) error("Document AI server returned $responseCode")
             JSONObject(body).getString("result")
         } catch (_: Exception) {
@@ -215,12 +227,17 @@ class OnlineAiAssistant(
         provider: AiProvider = AiProvider.GEMINI
     ): String = withContext(Dispatchers.IO) {
         try {
+            val idToken = idTokenProvider()
+            if (idToken.isNullOrBlank()) {
+                return@withContext "Sign in with your Firebase account in Settings to use online AI. Choose Local assistant for offline help."
+            }
             val connection = (URL("$baseUrl/api/assistant/chat").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 8_000
                 readTimeout = 20_000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Authorization", "Bearer $idToken")
             }
             val payload = JSONObject()
                 .put("message", message)
@@ -246,6 +263,12 @@ class OnlineAiAssistant(
             val responseCode = connection.responseCode
             val body = (if (responseCode in 200..299) connection.inputStream else connection.errorStream)
                 .bufferedReader().use { it.readText() }
+            if (responseCode == 401) {
+                return@withContext "Your Firebase session is invalid. Sign in again in Settings to use online AI."
+            }
+            if (responseCode == 503) {
+                return@withContext "Online AI is not configured on the Firebase server yet."
+            }
             if (responseCode !in 200..299) error("Assistant server returned $responseCode")
             JSONObject(body).getString("reply")
         } catch (_: Exception) {

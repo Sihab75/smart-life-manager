@@ -1,6 +1,7 @@
 package com.example.personal_financestudydaily_routine_assistant.data.database
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 @Entity(tableName = "users")
@@ -30,7 +31,7 @@ data class ExpenseEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "budgets")
+@Entity(tableName = "budgets", indices = [Index(value = ["category", "monthYear"], unique = true)])
 data class BudgetEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val category: String, // "Monthly" or specific category name like "Food"
@@ -82,7 +83,7 @@ data class StudySessionEntity(
     val dateString: String // YYYY-MM-DD
 )
 
-@Entity(tableName = "study_goals")
+@Entity(tableName = "study_goals", indices = [Index(value = ["dateString"], unique = true)])
 data class StudyGoalEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val targetHours: Double,
@@ -338,7 +339,7 @@ data class MonthlyReportEntity(
 @Entity(tableName = "user_settings")
 data class UserSettingsEntity(
     @PrimaryKey val id: Int = 1,
-    val userName: String = "Md. Korimul Jaman",
+    val userName: String = "Your name",
     val currencySymbol: String = "৳", // Default BDT ৳
     val monthlyBudgetAmount: Double = 15000.0,
     val darkModeOption: String = "System", // System, Light, Dark

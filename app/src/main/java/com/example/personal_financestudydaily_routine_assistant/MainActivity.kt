@@ -12,6 +12,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material3.*
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -51,11 +53,15 @@ import com.example.personal_financestudydaily_routine_assistant.data.database.*
 import com.example.personal_financestudydaily_routine_assistant.domain.calculator.ProductivityCalculator
 import com.example.personal_financestudydaily_routine_assistant.ui.theme.Personal_FinanceStudyDaily_Routine_AssistantTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.ArrayList
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.io.IOException
+import java.io.InputStreamReader
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,7 +84,7 @@ private enum class Destination(val label: String, val icon: androidx.compose.ui.
     SCHEDULE("Calendar", Icons.Default.CalendarMonth), ACADEMIC("Academic", Icons.Default.School), REPORTS("Reports", Icons.Default.BarChart),
     ANALYTICS("Analytics", Icons.Default.Analytics),
     BATCH("Batch Sync", Icons.Default.Campaign), ASSISTANT("AI Assistant", Icons.Default.AutoAwesome),
-    NOTES("Notes", Icons.Default.EditNote), DOCUMENTS("Documents", Icons.Default.Description),
+    NOTES("Notes & Documents", Icons.Default.EditNote),
     TRAVEL("Travel", Icons.Default.Train), NOTIFICATIONS("Notifications", Icons.Default.Notifications),
     SETTINGS("Settings", Icons.Default.Settings), ABOUT("About", Icons.Default.Info)
 }
@@ -95,13 +101,16 @@ private fun SmartLifeManagerApp(vm: MainViewModel = viewModel()) {
     var showStudyDialog by remember { mutableStateOf(false) }
     var showBatchDialog by remember { mutableStateOf(false) }
     var fabExpanded by remember { mutableStateOf(false) }
+    BackHandler(enabled = fabExpanded || (selected != Destination.HOME && !drawerState.isOpen)) {
+        if (fabExpanded) fabExpanded = false else selected = Destination.HOME
+    }
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
             val settings by vm.settings.collectAsState(initial = null)
             AppDrawer(
                 selected = selected,
-                userName = settings?.userName ?: "Md. Korimul Jaman",
+                userName = settings?.userName ?: "Your name",
                 onDestinationSelected = { destination ->
                     selected = destination
                     scope.launch { drawerState.close() }
@@ -147,7 +156,7 @@ private fun SmartLifeManagerApp(vm: MainViewModel = viewModel()) {
                         QuickAction("Add class", Icons.Default.Event) { showClassDialog = true; fabExpanded = false }
                         QuickAction("Add study session", Icons.AutoMirrored.Filled.MenuBook) { showStudyDialog = true; fabExpanded = false }
                         QuickAction("Add habit", Icons.Default.Repeat) { selected = Destination.HABITS; fabExpanded = false }
-                        QuickAction("Add note", Icons.Default.EditNote) { selected = Destination.ASSISTANT; fabExpanded = false }
+                        QuickAction("Add note", Icons.Default.EditNote) { selected = Destination.NOTES; fabExpanded = false }
                         QuickAction("Add travel/ticket", Icons.Default.FlightTakeoff) { selected = Destination.TRAVEL; fabExpanded = false }
                         if (selected == Destination.BATCH) {
                             QuickAction("Publish batch update", Icons.Default.Campaign) { showBatchDialog = true; fabExpanded = false }
@@ -183,7 +192,6 @@ private fun SmartLifeManagerApp(vm: MainViewModel = viewModel()) {
                 Destination.BATCH -> BatchSyncScreen(vm)
                 Destination.ASSISTANT -> AssistantScreen(vm)
                 Destination.NOTES -> DocumentsScreen(vm)
-                Destination.DOCUMENTS -> DocumentsScreen(vm)
                 Destination.TRAVEL -> TravelScreen(vm)
                 Destination.NOTIFICATIONS -> NotificationsScreen(vm)
                 Destination.SETTINGS -> SettingsScreen(vm)
@@ -271,7 +279,6 @@ private fun AppDrawer(
 
             drawerSectionLabel("ORGANIZE")
             drawerItem(Destination.NOTES, onDestinationSelected, selected)
-            drawerItem(Destination.DOCUMENTS, onDestinationSelected, selected)
 
             drawerSectionLabel("MORE")
             drawerExpandableItem(
@@ -348,7 +355,7 @@ private fun DrawerProfileHeader(userName: String, onSettingsClick: () -> Unit) {
                 maxLines = 1
             )
             Text(
-                "CSE • Batch 251",
+                "Personal workspace",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
                 maxLines = 1
@@ -514,11 +521,86 @@ private fun NotificationsScreen(vm: MainViewModel) {
 @Composable
 private fun SettingsScreen(vm: MainViewModel) {
     val settings by vm.settings.collectAsState(initial = null)
+    val cloudUser by vm.cloudUser.collectAsState()
+    var accountEmail by rememberSaveable { mutableStateOf("") }
+    var accountPassword by remember { mutableStateOf("") }
+    var createAccount by rememberSaveable { mutableStateOf(false) }
+    var authFeedback by remember { mutableStateOf<String?>(null) }
+    var authInProgress by remember { mutableStateOf(false) }
     ScreenColumn {
         Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         MetricCard("Profile", Modifier.fillMaxWidth()) {
-            Text(settings?.userName ?: "Md. Korimul Jaman", fontWeight = FontWeight.SemiBold)
+            Text(settings?.userName ?: "Your name", fontWeight = FontWeight.SemiBold)
             Text("Monthly budget: ৳${"%.0f".format(settings?.monthlyBudgetAmount ?: 15000.0)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text("AI account", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+        MetricCard("Firebase sign-in", Modifier.fillMaxWidth()) {
+            if (cloudUser != null) {
+                Text("Signed in as ${cloudUser?.email ?: cloudUser?.displayName ?: cloudUser?.uid}")
+                OutlinedButton(
+                    onClick = {
+                        vm.signOutFromCloud()
+                        authFeedback = "Signed out. Online AI requests are disabled until you sign in again."
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Sign out") }
+            } else {
+                Text(
+                    "Sign in to authorize online AI requests. Offline features and local AI remain available without an account.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = accountEmail,
+                    onValueChange = { accountEmail = it },
+                    label = { Text("Email") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = accountPassword,
+                    onValueChange = { accountPassword = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    enabled = !authInProgress && accountEmail.isNotBlank() &&
+                        (if (createAccount) accountPassword.length >= 6 else accountPassword.isNotBlank()),
+                    onClick = {
+                        authInProgress = true
+                        val onResult: (Result<com.example.personal_financestudydaily_routine_assistant.data.cloud.CloudUser>) -> Unit = { result ->
+                            authInProgress = false
+                            authFeedback = result.fold(
+                                { "Signed in as ${it.email ?: it.displayName ?: it.uid}." },
+                                { "Sign-in failed: ${it.message ?: "Please try again."}" }
+                            )
+                            if (result.isSuccess) accountPassword = ""
+                        }
+                        if (createAccount) {
+                            vm.registerWithEmail(accountEmail, accountPassword, onResult)
+                        } else {
+                            vm.signInWithEmail(accountEmail, accountPassword, onResult)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (createAccount) "Create account" else "Sign in")
+                }
+                TextButton(
+                    onClick = {
+                        createAccount = !createAccount
+                        authFeedback = null
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (createAccount) "Already have an account? Sign in" else "Create an account")
+                }
+            }
+            if (authInProgress) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            authFeedback?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
 }
@@ -605,6 +687,7 @@ private fun Dashboard(
     val monthExpense by vm.monthExpenseTotal.collectAsState(initial = 0.0)
     val studyMinutes by vm.todayStudyMinutes.collectAsState(initial = 0)
     val expenses by vm.expenses.collectAsState(initial = emptyList())
+    val budgets by vm.budgets.collectAsState(initial = emptyList())
     val studySessions by vm.studySessions.collectAsState(initial = emptyList())
     val goal by vm.todayGoal.collectAsState(initial = null)
     val tasks by vm.tasks.collectAsState(initial = emptyList())
@@ -627,12 +710,26 @@ private fun Dashboard(
         tasks.size, completedTasks, routines.size, routines.count { it.isCompleted }
     )
     val categoryTotals = expenses
-        .filter { it.dateString.endsWith(SimpleDateFormat("MM-yyyy", Locale.getDefault()).format(Date())) }
+        .filter { it.dateString.startsWith(SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(Date())) }
         .groupBy { it.category }
         .mapValues { (_, values) -> values.sumOf { it.amount } }
-    val nextClass = upcomingClass(classes, nowMillis)
-    val todayName = SimpleDateFormat("EEEE", Locale.getDefault()).format(Date())
-    val todayAcademicClasses = academicClasses.filter { it.dayOfWeek.equals(todayName, ignoreCase = true) }
+    val scheduleItems = remember(classes, academicClasses) {
+        classes.map { item ->
+            RoutineItem(item.id, item.courseCode, item.courseName, item.teacher, item.room, "", item.dayOfWeek,
+                item.startTime, item.endTime, "Class", false)
+        } + academicClasses.map { item ->
+            RoutineItem(item.id, item.courseCode, item.courseName, item.teacher, item.room, item.building, item.dayOfWeek,
+                item.startTime, item.endTime, item.kind, true, academicClass = item)
+        }
+    }
+    val nextClass = remember(scheduleItems, nowMillis) { scheduleStatus(scheduleItems, nowMillis) }
+    val todayName = SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(nowMillis))
+    val todayAcademicClasses = remember(academicClasses, todayName) {
+        sortRoutineItems(academicClasses.filter { it.dayOfWeek.equals(todayName, ignoreCase = true) }.map { item ->
+            RoutineItem(item.id, item.courseCode, item.courseName, item.teacher, item.room, item.building, item.dayOfWeek,
+                item.startTime, item.endTime, item.kind, true, academicClass = item)
+        }).mapNotNull { it.academicClass }
+    }
     val nextExam = academicExams.firstOrNull { it.examDate >= SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
     val notificationCount = unreadNotifications + pendingTasks.size + if (monthExpense ?: 0.0 > (settings?.monthlyBudgetAmount ?: 15000.0) * .8) 1 else 0
     val dateLabel = SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.getDefault()).format(Date())
@@ -645,7 +742,7 @@ private fun Dashboard(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.SpaceBetween) {
             Column(Modifier.weight(1f)) {
                 Text("$greeting,", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
-                Text(settings?.userName ?: "Md. Korimul Jaman", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(settings?.userName ?: "Your name", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                 Text(dateLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
             }
             Box {
@@ -667,32 +764,53 @@ private fun Dashboard(
         ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text("Small progress every day leads to big results.", fontWeight = FontWeight.SemiBold)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.WbSunny, null, tint = MaterialTheme.colorScheme.primary)
-                    Text("  28°C  ·  Weather unavailable? Your day still matters.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                Text("Your day, at a glance", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SummaryCard("Expense", "৳${"%.0f".format(monthExpense ?: 0.0)}", "this month", Icons.Default.Payments, Modifier.weight(1f))
+            SummaryCard("Expense", "৳${"%.0f".format(todayExpense ?: 0.0)}", "today", Icons.Default.Payments, Modifier.weight(1f))
             SummaryCard("Study", formatMinutes(studyMinutes ?: 0), "today", Icons.AutoMirrored.Filled.MenuBook, Modifier.weight(1f))
         }
+        val monthlyBudget = budgets.firstOrNull { it.category == "Monthly" }?.amount
+            ?: settings?.monthlyBudgetAmount
+            ?: 0.0
+        SummaryCard(
+            "Monthly spending",
+            "৳${"%.0f".format(monthExpense ?: 0.0)}",
+            if (monthlyBudget > 0) "৳${"%.0f".format((monthlyBudget - (monthExpense ?: 0.0)).coerceAtLeast(0.0))} remaining" else "Budget not set",
+            Icons.Default.AccountBalanceWallet,
+            Modifier.fillMaxWidth()
+        )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             SummaryCard("Tasks", "$completedTasks / ${tasks.size}", "completed", Icons.Default.TaskAlt, Modifier.weight(1f))
-            SummaryCard("Upcoming", "${classes.size}", "classes", Icons.Default.Event, Modifier.weight(1f))
+            SummaryCard("Upcoming", "${todayAcademicClasses.count { routineItemStatus(
+                RoutineItem(it.id, it.courseCode, it.courseName, it.teacher, it.room, it.building, it.dayOfWeek, it.startTime, it.endTime, it.kind, true),
+                nowMillis, nowMillis
+            ) == ScheduleState.NEXT }}", "classes today", Icons.Default.Event, Modifier.weight(1f))
         }
         MetricCard("Next class", Modifier.fillMaxWidth()) {
-            if (nextClass == null) Text("No classes added yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (nextClass.item == null) Text(if (nextClass.state == ScheduleState.COMPLETED) "No more classes today 🎉" else "No classes added yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
             else {
-                Text("${nextClass.courseCode} · ${nextClass.courseName}", fontWeight = FontWeight.Bold)
-                Text("${nextClass.dayOfWeek}, ${nextClass.startTime} - ${nextClass.endTime} · ${nextClass.room}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Starts in ${countdownLabel(nextClass, nowMillis)}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                val item = nextClass.item
+                Text(if (nextClass.state == ScheduleState.CURRENT) "LIVE NOW" else "NEXT CLASS", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                Text("${item.courseCode} · ${item.courseName}", fontWeight = FontWeight.Bold)
+                Text("${item.dayOfWeek}, ${formatRoutineTime(item.startTime)} - ${formatRoutineTime(item.endTime)}${routineLocationLabel(item)?.let { " · $it" } ?: ""}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (nextClass.state == ScheduleState.CURRENT) "Ends in ${formatScheduleCountdown(nextClass.minutes)}" else "Starts in ${formatScheduleCountdown(nextClass.minutes)}", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
             }
             if (todayAcademicClasses.isNotEmpty()) {
                 MetricCard("Today's classes", Modifier.fillMaxWidth()) {
                     todayAcademicClasses.forEach { item ->
-                        Text("${item.startTime}  ${item.courseCode} - ${item.courseName}", fontWeight = FontWeight.SemiBold)
-                        Text(listOf(item.room.takeIf { it.isNotBlank() }?.let { "Room $it" }, item.building).filterNotNull().joinToString(" · "), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        val routineItem = RoutineItem(item.id, item.courseCode, item.courseName, item.teacher, item.room, item.building,
+                            item.dayOfWeek, item.startTime, item.endTime, item.kind, true, academicClass = item)
+                        val status = routineItemStatus(routineItem, nowMillis, nowMillis)
+                        Text("${formatRoutineTime(item.startTime)}  ${item.courseCode} - ${item.courseName} · ${when (status) {
+                            ScheduleState.CURRENT -> "NOW / LIVE"
+                            ScheduleState.NEXT -> "UPCOMING"
+                            ScheduleState.COMPLETED -> "COMPLETED"
+                            ScheduleState.NONE -> "TIME UNAVAILABLE"
+                        }}", fontWeight = FontWeight.SemiBold)
+                        listOf(item.room.trim(), item.building.trim()).filter { it.isNotBlank() }
+                            .joinToString(" · ").takeIf { it.isNotBlank() }?.let { Text("📍 $it", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
                     }
                 }
             }
@@ -742,7 +860,7 @@ private fun Dashboard(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (pendingTasks.isNotEmpty()) pendingTasks.forEach { Text("Task reminder · ${it.title}") }
                     if (monthExpense ?: 0.0 > (settings?.monthlyBudgetAmount ?: 15000.0) * .8) Text("Budget warning · 80% of monthly budget used")
-                    if (nextClass != null) Text("Upcoming class · ${nextClass.courseCode} at ${nextClass.startTime}")
+                    if (nextClass.item != null) Text("${if (nextClass.state == ScheduleState.CURRENT) "Current" else "Upcoming"} class · ${nextClass.item.courseCode} at ${nextClass.item.startTime}")
                     if (notificationCount == 0) Text("You're all caught up.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
@@ -760,16 +878,13 @@ private fun ExpensesScreen(vm: MainViewModel) {
     val recurring by vm.recurringExpenses.collectAsState(initial = emptyList())
     var ledger by rememberSaveable { mutableStateOf("All") }
     var period by rememberSaveable { mutableStateOf("Month") }
+    var showBudgetDialog by remember { mutableStateOf(false) }
     var showGoalDialog by remember { mutableStateOf(false) }
     var showCategoryDialog by remember { mutableStateOf(false) }
-    val periodStartMillis = System.currentTimeMillis() - when (period) {
-        "Day" -> 86_400_000L
-        "Week" -> 7 * 86_400_000L
-        "Year" -> 365 * 86_400_000L
-        else -> 30 * 86_400_000L
-    }
+    val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+    val periodStart = expensePeriodStartDate(period, System.currentTimeMillis())
     val visibleExpenses = expenses.filter {
-        (ledger == "All" || it.ledger == ledger) && it.dateMillis >= periodStartMillis
+        (ledger == "All" || it.ledger == ledger) && it.dateString in periodStart..today
     }
     val categoryTotals = visibleExpenses.groupBy { it.category }.mapValues { (_, values) -> values.sumOf { it.amount } }
     val maxCategory = categoryTotals.values.maxOrNull() ?: 1.0
@@ -793,7 +908,7 @@ private fun ExpensesScreen(vm: MainViewModel) {
                 SegmentedButton(selected = period == option, onClick = { period = option }, shape = SegmentedButtonDefaults.itemShape(0, 4)) { Text(option) }
             }
         }
-        MetricCard("${period}ly report", Modifier.fillMaxWidth()) {
+        MetricCard("${when (period) { "Day" -> "Daily"; "Week" -> "Weekly"; "Month" -> "Monthly"; else -> "Yearly" }} report", Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Metric("Total", "৳${"%.0f".format(visibleExpenses.sumOf { it.amount })}", Icons.Default.Payments)
                 Metric("Transactions", visibleExpenses.size.toString(), Icons.AutoMirrored.Filled.ReceiptLong)
@@ -821,8 +936,10 @@ private fun ExpensesScreen(vm: MainViewModel) {
         MetricCard("Monthly budget", Modifier.fillMaxWidth()) {
             Text("৳${"%.0f".format(monthTotal ?: 0.0)} of ৳${"%.0f".format(budget)}")
             LinearProgressIndicator({ budgetProgress.toFloat().coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
-            if (budgetProgress >= 0.8) Text("Budget alert: you have used ${(budgetProgress * 100).toInt()}% of your limit.", color = MaterialTheme.colorScheme.error)
+            if (budget <= 0.0) Text("Set a limit to track your monthly spending.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else if (budgetProgress >= 0.8) Text("Budget alert: you have used ${(budgetProgress * 100).toInt()}% of your limit.", color = MaterialTheme.colorScheme.error)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { showBudgetDialog = true }) { Text("Set budget") }
                 OutlinedButton(onClick = { showCategoryDialog = true }) { Text("Custom category") }
                 OutlinedButton(onClick = { showGoalDialog = true }) { Text("Savings goal") }
             }
@@ -832,7 +949,10 @@ private fun ExpensesScreen(vm: MainViewModel) {
             goals.forEach { goal ->
                 MetricCard(goal.name, Modifier.fillMaxWidth()) {
                     Text("৳${"%.0f".format(goal.savedAmount)} / ৳${"%.0f".format(goal.targetAmount)}")
-                    LinearProgressIndicator({ (goal.savedAmount / goal.targetAmount).toFloat().coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
+                    val progress = if (goal.targetAmount > 0.0) {
+                        (goal.savedAmount / goal.targetAmount).toFloat().coerceIn(0f, 1f)
+                    } else 0f
+                    LinearProgressIndicator({ progress }, Modifier.fillMaxWidth())
                 }
             }
         }
@@ -859,6 +979,7 @@ private fun ExpensesScreen(vm: MainViewModel) {
             }
         }
         if (showGoalDialog) AddSavingsGoalDialog(vm) { showGoalDialog = false }
+        if (showBudgetDialog) AddBudgetDialog(vm, budget) { showBudgetDialog = false }
         if (showCategoryDialog) AddCategoryDialog(vm) { showCategoryDialog = false }
     }
 }
@@ -889,7 +1010,14 @@ private fun StudyScreen(vm: MainViewModel) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 Button(onClick = { running = !running }) { Icon(if (running) Icons.Default.Pause else Icons.Default.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text(if (running) "Pause" else "Start") }
                 Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = { if (elapsed > 0) vm.addStudySession(subject, (elapsed / 60).toInt().coerceAtLeast(1)); elapsed = 0; running = false }) { Text("Save session") }
+                OutlinedButton(
+                    onClick = {
+                        vm.addStudySession(subject, (elapsed / 60).toInt())
+                        elapsed = 0
+                        running = false
+                    },
+                    enabled = elapsed >= 60 && subject.isNotBlank()
+                ) { Text("Save session") }
             }
         }
         Text("Recent sessions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -1241,7 +1369,9 @@ private fun ReportsScreen(vm: MainViewModel) {
         }
         Text("Weekly goals", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         goals.forEach { goal ->
-            val progress = (goal.completedValue / goal.targetValue * 100).toInt().coerceIn(0, 100)
+            val progress = if (goal.targetValue > 0.0) {
+                (goal.completedValue / goal.targetValue * 100).toInt().coerceIn(0, 100)
+            } else 0
             MetricCard(goal.title, Modifier.fillMaxWidth()) { ProgressRow("${goal.completedValue} / ${goal.targetValue} ${goal.unit}", progress) }
         }
     }
@@ -1262,7 +1392,9 @@ private fun AssistantScreen(vm: MainViewModel) {
     val academicEvents by vm.academicDaoEvents.collectAsState(initial = emptyList())
     val todayRoutines by vm.todayRoutines.collectAsState(initial = emptyList())
     val assistant = remember { LocalAiAssistant() }
-    val onlineAssistant = remember { OnlineAiAssistant(fallback = assistant) }
+    val onlineAssistant = remember(vm) {
+        OnlineAiAssistant(fallback = assistant, idTokenProvider = vm::assistantIdToken)
+    }
     val scope = rememberCoroutineScope()
     val platformContext = LocalContext.current
     val providerPreferences = remember {
@@ -1286,8 +1418,44 @@ private fun AssistantScreen(vm: MainViewModel) {
     var showDelete by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
     var attachedFile by remember { mutableStateOf<String?>(null) }
+    var attachedText by remember { mutableStateOf<String?>(null) }
+    var attachmentError by remember { mutableStateOf<String?>(null) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) attachedFile = uri.toString().substringAfterLast('/').substringAfterLast(':')
+        if (uri != null) {
+            attachmentError = null
+            attachedFile = null
+            attachedText = null
+            scope.launch {
+                try {
+                    val text = withContext(Dispatchers.IO) {
+                        platformContext.contentResolver.openInputStream(uri)?.use { stream ->
+                            InputStreamReader(stream, Charsets.UTF_8).use { reader ->
+                                val buffer = CharArray(4096)
+                                buildString {
+                                    while (length < 30_000) {
+                                        val count = reader.read(buffer, 0, minOf(buffer.size, 30_000 - length))
+                                        if (count < 0) break
+                                        append(buffer, 0, count)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (text.isNullOrBlank()) {
+                        attachmentError = "The selected text file is empty or could not be read."
+                        attachedFile = null
+                        attachedText = null
+                    } else {
+                        attachedFile = uri.toString().substringAfterLast('/').substringAfterLast(':')
+                        attachedText = text
+                    }
+                } catch (error: IOException) {
+                    attachmentError = "Could not read the selected file: ${error.localizedMessage ?: "I/O error"}"
+                } catch (error: SecurityException) {
+                    attachmentError = "Access to the selected file was denied."
+                }
+            }
+        }
     }
     val assistantContext = AssistantContext(
         todayExpense = todayExpense ?: 0.0,
@@ -1339,15 +1507,21 @@ private fun AssistantScreen(vm: MainViewModel) {
     fun sendMessage(message: String = input) {
         val question = message.trim()
         if (question.isBlank()) return
+        val request = attachedText?.let { "$question\n\nAttached document text:\n$it" } ?: question
         val conversationId = selectedConversation?.id ?: selectedConversationId
-        vm.saveAssistantMessage("ME", if (attachedFile != null) "$question\n\n[Attached: $attachedFile]" else question, conversationId)
+        vm.saveAssistantMessage(
+            "ME",
+            if (attachedFile != null) "$request\n\n[Attached: $attachedFile]" else request,
+            conversationId
+        )
         input = ""
         attachedFile = null
+        attachedText = null
         scope.launch {
             val answer = if (selectedProvider == AiProvider.LOCAL) {
-                assistant.reply(question, assistantContext)
+                assistant.reply(request, assistantContext)
             } else {
-                onlineAssistant.reply(question, assistantContext, selectedProvider)
+                onlineAssistant.reply(request, assistantContext, selectedProvider)
             }
             vm.saveAssistantMessage("AI", answer, conversationId)
             if (ttsReady) {
@@ -1554,7 +1728,14 @@ private fun AssistantScreen(vm: MainViewModel) {
         }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
             if (attachedFile != null) {
-                AssistChip(onClick = { attachedFile = null }, label = { Text(attachedFile!!, maxLines = 1) }, leadingIcon = { Icon(Icons.Default.AttachFile, null) })
+                AssistChip(
+                    onClick = {
+                        attachedFile = null
+                        attachedText = null
+                    },
+                    label = { Text(attachedFile.orEmpty(), maxLines = 1) },
+                    leadingIcon = { Icon(Icons.Default.AttachFile, null) }
+                )
             }
             OutlinedTextField(
                 value = input,
@@ -1564,8 +1745,8 @@ private fun AssistantScreen(vm: MainViewModel) {
                 modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.width(8.dp))
-            IconButton(onClick = { filePicker.launch(arrayOf("text/*", "application/pdf", "image/*")) }) {
-                Icon(Icons.Default.AttachFile, "Upload file")
+            IconButton(onClick = { filePicker.launch(arrayOf("text/plain")) }) {
+                Icon(Icons.Default.AttachFile, "Attach plain-text file")
             }
             IconButton(
                 onClick = {
@@ -1587,6 +1768,16 @@ private fun AssistantScreen(vm: MainViewModel) {
             IconButton(enabled = input.isNotBlank(), onClick = { sendMessage() }) {
                 Icon(Icons.AutoMirrored.Filled.Send, "Send message")
             }
+            }
+            if (attachmentError != null) {
+                Text(attachmentError.orEmpty(), color = MaterialTheme.colorScheme.error)
+            }
+            if (attachedText != null && selectedProvider != AiProvider.LOCAL) {
+                Text(
+                    "Attached text is included in your prompt and sent to the selected AI provider.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
         }
@@ -1677,15 +1868,18 @@ private fun MarkdownMessage(text: String, modifier: Modifier = Modifier) {
 @Composable
 private fun ExpensePieChart(values: Map<String, Double>, modifier: Modifier) {
     val palette = listOf(Color(0xFF6750A4), Color(0xFF006A6A), Color(0xFF9C4146), Color(0xFF7A5900), Color(0xFF386A20))
-    val total = values.values.sum().coerceAtLeast(1.0)
+    val positiveValues = values.filterValues { it.isFinite() && it > 0.0 }
+    val total = positiveValues.values.sum()
+    val centerColor = MaterialTheme.colorScheme.surface
     Canvas(modifier) {
+        if (total <= 0.0) return@Canvas
         var start = -90f
-        values.entries.forEachIndexed { index, entry ->
+        positiveValues.entries.forEachIndexed { index, entry ->
             val sweep = (entry.value / total * 360f).toFloat()
             drawArc(palette[index % palette.size], start, sweep, true)
             start += sweep
         }
-        drawCircle(Color.White, radius = size.minDimension * .18f)
+        drawCircle(centerColor, radius = size.minDimension * .18f)
     }
 }
 
@@ -1715,6 +1909,37 @@ private fun AddSavingsGoalDialog(vm: MainViewModel, dismiss: () -> Unit) {
     }, confirmButton = {
         Button(enabled = name.isNotBlank() && amount.toDoubleOrNull()?.let { it > 0 } == true, onClick = { vm.addSavingsGoal(name, amount.toDouble()); dismiss() }) { Text("Save goal") }
     }, dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } })
+}
+
+@Composable
+private fun AddBudgetDialog(vm: MainViewModel, currentBudget: Double, dismiss: () -> Unit) {
+    var amount by rememberSaveable(currentBudget) {
+        mutableStateOf(if (currentBudget > 0.0) currentBudget.toString() else "")
+    }
+    val parsedAmount = amount.toDoubleOrNull()
+    AlertDialog(
+        onDismissRequest = dismiss,
+        title = { Text("Monthly budget") },
+        text = {
+            OutlinedTextField(
+                value = amount,
+                onValueChange = { amount = it },
+                label = { Text("Limit (BDT)") },
+                singleLine = true,
+                isError = amount.isNotBlank() && (parsedAmount == null || !parsedAmount.isFinite() || parsedAmount <= 0.0)
+            )
+        },
+        confirmButton = {
+            Button(
+                enabled = parsedAmount != null && parsedAmount.isFinite() && parsedAmount > 0.0,
+                onClick = {
+                    vm.saveBudget("Monthly", requireNotNull(parsedAmount))
+                    dismiss()
+                }
+            ) { Text("Save budget") }
+        },
+        dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } }
+    )
 }
 
 @Composable
@@ -2060,50 +2285,31 @@ private fun StudySparkline(sessions: List<StudySessionEntity>, modifier: Modifie
     }
 }
 
-private fun upcomingClass(classes: List<ClassEntity>, nowMillis: Long): ClassEntity? {
-    val calendar = java.util.Calendar.getInstance().apply { timeInMillis = nowMillis }
-    val today = SimpleDateFormat("EEEE", Locale.getDefault()).format(calendar.time)
-    val currentMinutes = calendar.get(java.util.Calendar.HOUR_OF_DAY) * 60 + calendar.get(java.util.Calendar.MINUTE)
-    fun startMinutes(value: String): Int? = try {
-        val parsed = SimpleDateFormat("hh:mm a", Locale.US).parse(value) ?: return null
-        java.util.Calendar.getInstance().apply { time = parsed }.let {
-            it.get(java.util.Calendar.HOUR_OF_DAY) * 60 + it.get(java.util.Calendar.MINUTE)
-        }
-    } catch (_: java.text.ParseException) { null }
-    val dayNames = listOf("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
-    val todayIndex = dayNames.indexOfFirst { it.equals(today, ignoreCase = true) }.coerceAtLeast(0)
-    fun minutesAway(item: ClassEntity): Int {
-        val classDay = dayNames.indexOfFirst { it.equals(item.dayOfWeek, ignoreCase = true) }
-        val dayDelta = (classDay - todayIndex + 7) % 7
-        val start = startMinutes(item.startTime) ?: return Int.MAX_VALUE
-        return dayDelta * 1440 + start - currentMinutes
-    }
-    return classes.minByOrNull { minutesAway(it).let { value -> if (value < 0) value + 7 * 1440 else value } }
-}
-
 private fun dateOffset(days: Int): String =
-    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(System.currentTimeMillis() + days * 86_400_000L))
+    SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(
+        java.util.Calendar.getInstance().apply { add(java.util.Calendar.DAY_OF_YEAR, days) }.time
+    )
 
-private fun countdownLabel(classEntity: ClassEntity, nowMillis: Long): String {
-    val start = try {
-        SimpleDateFormat("hh:mm a", Locale.US).parse(classEntity.startTime)
-    } catch (_: java.text.ParseException) { null }
-    if (start == null) return "soon"
-    val startCalendar = java.util.Calendar.getInstance().apply {
+internal fun expensePeriodStartDate(period: String, nowMillis: Long): String {
+    val start = java.util.Calendar.getInstance().apply {
         timeInMillis = nowMillis
-        val parsed = java.util.Calendar.getInstance().apply { time = start }
-        set(java.util.Calendar.HOUR_OF_DAY, parsed.get(java.util.Calendar.HOUR_OF_DAY))
-        set(java.util.Calendar.MINUTE, parsed.get(java.util.Calendar.MINUTE))
+        set(java.util.Calendar.HOUR_OF_DAY, 0)
+        set(java.util.Calendar.MINUTE, 0)
         set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+        when (period) {
+            "Week" -> {
+                val daysSinceWeekStart =
+                    (get(java.util.Calendar.DAY_OF_WEEK) - firstDayOfWeek + 7) % 7
+                add(java.util.Calendar.DAY_OF_YEAR, -daysSinceWeekStart)
+            }
+            "Month" -> set(java.util.Calendar.DAY_OF_MONTH, 1)
+            "Year" -> {
+                set(java.util.Calendar.DAY_OF_YEAR, 1)
+            }
+        }
     }
-    val todayName = SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(nowMillis))
-    val dayNames = listOf("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
-    val todayIndex = dayNames.indexOfFirst { it.equals(todayName, ignoreCase = true) }.coerceAtLeast(0)
-    val classIndex = dayNames.indexOfFirst { it.equals(classEntity.dayOfWeek, ignoreCase = true) }
-    val dayDelta = (classIndex - todayIndex + 7) % 7
-    if (dayDelta > 0) startCalendar.add(java.util.Calendar.DAY_OF_YEAR, dayDelta)
-    val minutes = ((startCalendar.timeInMillis - nowMillis) / 60_000L).coerceAtLeast(0)
-    return if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "$minutes min"
+    return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(start.time)
 }
 
 @Composable internal fun ScreenColumn(content: @Composable ColumnScope.() -> Unit) {
@@ -2116,7 +2322,7 @@ private fun countdownLabel(classEntity: ClassEntity, nowMillis: Long): String {
 @Composable internal fun MetricCard(title: String, modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
     Card(modifier, shape = RoundedCornerShape(20.dp)) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary); content() } }
 }
-@Composable internal fun ListCard(content: @Composable RowScope.() -> Unit) { Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Row(Modifier.padding(14.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, content = content) } }
+@Composable internal fun ListCard(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) { Card(modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Row(Modifier.padding(14.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, content = content) } }
 @Composable private fun Metric(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Text(value, fontWeight = FontWeight.Bold); Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
 @Composable internal fun ActionButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, action: () -> Unit, modifier: Modifier) { Button(onClick = action, modifier = modifier) { Icon(icon, null); Spacer(Modifier.width(5.dp)); Text(label) } }
 @Composable private fun ProgressRow(label: String, percent: Int) { Text("$label  $percent%"); LinearProgressIndicator({ percent / 100f }, Modifier.fillMaxWidth()) }

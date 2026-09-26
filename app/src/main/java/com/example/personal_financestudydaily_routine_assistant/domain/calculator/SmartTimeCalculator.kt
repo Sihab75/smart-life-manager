@@ -25,6 +25,7 @@ object SmartTimeCalculator {
      * based on typical available slots (10:00 AM, 03:00 PM, 09:00 PM).
      */
     fun calculateDailyStudyPlan(targetHours: Double, primarySubject: String = "Core Subject"): List<StudySessionSlot> {
+        if (!targetHours.isFinite() || targetHours <= 0.0) return emptyList()
         val totalMinutes = (targetHours * 60).toInt()
         if (totalMinutes <= 0) return emptyList()
 
@@ -104,6 +105,9 @@ object SmartTimeCalculator {
         targetWeeklyHours: Double,
         classes: List<ClassEntity>
     ): List<WeeklyTimeAllocation> {
+        if (!targetWeeklyHours.isFinite() || targetWeeklyHours <= 0.0) {
+            return emptyList()
+        }
         val days = listOf("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
         val classesByDay = classes.groupBy { it.dayOfWeek }
 
@@ -119,9 +123,7 @@ object SmartTimeCalculator {
 
         return dayAvailabilities.map { (day, classCount, available) ->
             val allocatedHours = if (totalAvailable > 0) {
-                ((available / totalAvailable) * targetWeeklyHours).let {
-                    Math.round(it * 10) / 10.0 // round to 1 decimal
-                }
+                (available / totalAvailable) * targetWeeklyHours
             } else {
                 targetWeeklyHours / 7
             }

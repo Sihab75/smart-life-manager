@@ -33,7 +33,9 @@ internal fun FocusScreen(vm: MainViewModel) {
     val sessions by vm.studySessions.collectAsState(initial = emptyList())
     val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
     val todaySessions = sessions.filter { it.dateString == today }
-    val completedFocusMinutes = todaySessions.sumOf { it.durationMinutes }
+    val completedFocusMinutes = todaySessions
+        .filter { it.subject == "Pomodoro focus session" }
+        .sumOf { it.durationMinutes }
     var targetSessions by rememberSaveable { mutableIntStateOf(4) }
     var mode by rememberSaveable { mutableStateOf(FocusMode.FOCUS) }
     var remaining by rememberSaveable { mutableIntStateOf(FocusMode.FOCUS.durationSeconds) }

@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -59,7 +60,7 @@ class BackgroundNotificationWorker(
 
         database.academicDao().getAllClassesOnce().forEach { classEntity ->
             val nextClass = nextClassTime(classEntity.dayOfWeek, classEntity.startTime, now)
-            if (classEntity.notificationsEnabled && nextClass != null &&
+            if (classEntity.notificationsEnabled && classEntity.reminderMinutes > 0 && nextClass != null &&
                 dateFormat.format(nextClass.time) == today &&
                 nextClass.timeInMillis - now.timeInMillis in 0..(classEntity.reminderMinutes * 60_000L)
             ) {
@@ -67,7 +68,9 @@ class BackgroundNotificationWorker(
                 notifyOnce(
                     key,
                     "Class starts in ${classEntity.reminderMinutes} minutes",
-                    "${classEntity.courseCode} - ${classEntity.courseName}${classEntity.room.takeIf { it.isNotBlank() }?.let { " · Room $it" } ?: ""}",
+                    "${classEntity.courseCode} · ${classEntity.courseName}" +
+                        listOf(classEntity.startTime, classEntity.room, classEntity.building)
+                            .filter { it.isNotBlank() }.joinToString(" · ", prefix = " · "),
                     "academic",
                     key.hashCode()
                 )
@@ -123,6 +126,28 @@ class BackgroundNotificationWorker(
             }
         }
 
+        database.dailyRoutineDao().getRoutinesForDateOnce(today)
+            .filter { it.reminderEnabled && !it.isCompleted }
+            .forEach { routine ->
+                val startMinutes = parseRoutineTime(routine.startTime) ?: return@forEach
+                val start = (now.clone() as Calendar).apply {
+                    set(Calendar.HOUR_OF_DAY, startMinutes / 60)
+                    set(Calendar.MINUTE, startMinutes % 60)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }
+                if (start.timeInMillis - now.timeInMillis in 0..14 * 60_000L) {
+                    val key = "routine:${routine.id}:$today"
+                    notifyOnce(
+                        key,
+                        "Routine starting soon",
+                        "${routine.title} starts at ${routine.startTime}.",
+                        "routine",
+                        key.hashCode()
+                    )
+                }
+            }
+
         database.habitDao().getAllHabitsOnce()
             .filter { it.reminderEnabled }
             .forEach { habit ->
@@ -153,9 +178,11 @@ class BackgroundNotificationWorker(
         if (preferences.getBoolean(key, false)) return
 
         val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Smart Life reminders", NotificationManager.IMPORTANCE_HIGH)
-        )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Smart Life reminders", NotificationManager.IMPORTANCE_HIGH)
+            )
+        }
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)
@@ -164,7 +191,18 @@ class BackgroundNotificationWorker(
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(applicationContext).notify(notificationId, notification)
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) return
+        if (!NotificationManagerCompat.from(applicationContext).areNotificationsEnabled()) return
+        try {
+            NotificationManagerCompat.from(applicationContext).notify(notificationId, notification)
+        } catch (_: SecurityException) {
+            return
+        }
         AppDatabase.getDatabase(applicationContext).notificationDao().insertNotification(
             NotificationEntity(title = title, message = message, type = type)
         )

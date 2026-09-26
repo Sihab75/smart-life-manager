@@ -173,6 +173,12 @@ interface DailyRoutineDao {
     @Query("SELECT * FROM daily_routines WHERE dateString = :dateString ORDER BY startTime ASC")
     fun getRoutinesForDate(dateString: String): Flow<List<DailyRoutineEntity>>
 
+    @Query("SELECT * FROM daily_routines WHERE dateString = :dateString ORDER BY startTime ASC")
+    suspend fun getRoutinesForDateOnce(dateString: String): List<DailyRoutineEntity>
+
+    @Query("SELECT * FROM daily_routines ORDER BY dateString ASC, startTime ASC")
+    fun getAllRoutines(): Flow<List<DailyRoutineEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRoutine(routine: DailyRoutineEntity): Long
 
@@ -212,7 +218,10 @@ interface HabitDao {
 
 @Dao
 interface TaskDao {
-    @Query("SELECT * FROM tasks ORDER BY isCompleted ASC, deadlineMillis ASC")
+    @Query(
+        "SELECT * FROM tasks ORDER BY isCompleted ASC, " +
+            "CASE priority WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END ASC, deadlineMillis ASC"
+    )
     fun getAllTasks(): Flow<List<TaskEntity>>
 
     @Query("SELECT * FROM tasks WHERE isCompleted = 0")
@@ -314,6 +323,8 @@ interface AcademicDao {
     suspend fun insertCourse(item: AcademicCourseEntity): Long
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertClass(item: AcademicClassEntity): Long
+    @Update
+    suspend fun updateClass(item: AcademicClassEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertExam(item: AcademicExamEntity): Long
     @Insert(onConflict = OnConflictStrategy.REPLACE)

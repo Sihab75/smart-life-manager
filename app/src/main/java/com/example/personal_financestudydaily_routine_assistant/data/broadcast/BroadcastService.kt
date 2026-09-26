@@ -9,22 +9,17 @@ interface NotificationChannel {
     suspend fun deliver(announcement: BatchAnnouncementEntity, contact: StudentContactEntity): ChannelDeliveryResult
 }
 
-class InAppNotificationChannel(private val dao: NotificationDao) : NotificationChannel {
+class InAppNotificationChannel : NotificationChannel {
     override val name = "In-App"
 
     override suspend fun deliver(
         announcement: BatchAnnouncementEntity,
         contact: StudentContactEntity
-    ): ChannelDeliveryResult {
-        dao.insertNotification(
-            NotificationEntity(
-                title = announcement.title,
-                message = announcement.details,
-                type = "batch"
-            )
+    ): ChannelDeliveryResult =
+        ChannelDeliveryResult(
+            "Not sent",
+            "Announcement saved on this device; recipient delivery is not configured."
         )
-        return ChannelDeliveryResult("Successful", "In-app notification created")
-    }
 }
 
 class WhatsAppChannel : NotificationChannel {
@@ -54,11 +49,10 @@ class MessengerChannel : NotificationChannel {
 }
 
 class BroadcastService(
-    private val broadcastDao: BroadcastDao,
-    private val notificationDao: NotificationDao
+    private val broadcastDao: BroadcastDao
 ) {
     private val channels = listOf(
-        InAppNotificationChannel(notificationDao),
+        InAppNotificationChannel(),
         WhatsAppChannel(),
         MessengerChannel()
     ).associateBy { it.name }
