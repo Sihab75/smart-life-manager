@@ -41,8 +41,8 @@ internal fun HabitTrackerScreen(vm: MainViewModel) {
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MetricCard("Daily streak", Modifier.weight(1f)) { Text("$streak days", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
-            MetricCard("Today", Modifier.weight(1f)) { Text("${percent(completedForSelected, habits.size)}%", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
-            MetricCard("This week", Modifier.weight(1f)) { Text("${percent(weekDone, weekTotal)}%", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+            MetricCard("Selected day", Modifier.weight(1f)) { Text("${percent(completedForSelected, habits.size)}%", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
+            MetricCard("Last 7 days", Modifier.weight(1f)) { Text("${percent(weekDone, weekTotal)}%", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary) }
         }
         Button(onClick = { showAdd = true }, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Add habit")

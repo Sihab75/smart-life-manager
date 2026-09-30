@@ -16,14 +16,22 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.Canvas
 import androidx.compose.material.icons.Icons
@@ -33,6 +41,9 @@ import androidx.compose.material3.*
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -69,8 +80,22 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1002)
         BackgroundNotificationWorker.schedule(this)
         setContent {
-            Personal_FinanceStudyDaily_Routine_AssistantTheme {
-                SmartLifeManagerApp()
+            val vm: MainViewModel = viewModel()
+            val settings by vm.settings.collectAsState(initial = null)
+            val darkTheme = when (settings?.darkModeOption) {
+                "Light" -> false
+                "Dark" -> true
+                else -> isSystemInDarkTheme()
+            }
+            val view = LocalView.current
+            SideEffect {
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !darkTheme
+                    isAppearanceLightNavigationBars = !darkTheme
+                }
+            }
+            Personal_FinanceStudyDaily_Routine_AssistantTheme(darkTheme = darkTheme) {
+                SmartLifeManagerApp(vm)
             }
         }
     }
@@ -85,9 +110,17 @@ private enum class Destination(val label: String, val icon: androidx.compose.ui.
     ANALYTICS("Analytics", Icons.Default.Analytics),
     BATCH("Batch Sync", Icons.Default.Campaign), ASSISTANT("AI Assistant", Icons.Default.AutoAwesome),
     NOTES("Notes & Documents", Icons.Default.EditNote),
-    TRAVEL("Travel", Icons.Default.Train), NOTIFICATIONS("Notifications", Icons.Default.Notifications),
+    TRAVEL("Travel", Icons.Default.Train), LOCATION("Location Sharing", Icons.Default.LocationOn),
+    NOTIFICATIONS("Notifications", Icons.Default.Notifications),
     SETTINGS("Settings", Icons.Default.Settings), ABOUT("About", Icons.Default.Info)
 }
+
+private data class QuickActionItem(
+    val label: String,
+    val description: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val onClick: () -> Unit
+)
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -99,12 +132,43 @@ private fun SmartLifeManagerApp(vm: MainViewModel = viewModel()) {
     var showTaskDialog by remember { mutableStateOf(false) }
     var showClassDialog by remember { mutableStateOf(false) }
     var showStudyDialog by remember { mutableStateOf(false) }
-    var showBatchDialog by remember { mutableStateOf(false) }
-    var fabExpanded by remember { mutableStateOf(false) }
-    BackHandler(enabled = fabExpanded || (selected != Destination.HOME && !drawerState.isOpen)) {
-        if (fabExpanded) fabExpanded = false else selected = Destination.HOME
+    var showQuickActions by remember { mutableStateOf(false) }
+    val screenStateHolder = rememberSaveableStateHolder()
+    val primaryDestinations = listOf(
+        Destination.HOME,
+        Destination.EXPENSES,
+        Destination.STUDY,
+        Destination.SCHEDULE
+    )
+    val quickActions = when (selected) {
+        Destination.HOME -> listOf(
+            QuickActionItem("Add expense", "Record a purchase", Icons.Default.Payments) { showExpenseDialog = true },
+            QuickActionItem("Add task", "Capture something to do", Icons.Default.CheckCircle) { showTaskDialog = true },
+            QuickActionItem("Study session", "Log time spent learning", Icons.AutoMirrored.Filled.MenuBook) { showStudyDialog = true },
+            QuickActionItem("Add class", "Add a weekly class", Icons.Default.Event) { showClassDialog = true },
+            QuickActionItem("Habits", "Check in on your routines", Icons.Default.Repeat) { selected = Destination.HABITS },
+            QuickActionItem("Notes & documents", "Open your study library", Icons.Default.EditNote) { selected = Destination.NOTES },
+            QuickActionItem("Travel", "Manage a trip or ticket", Icons.Default.Train) { selected = Destination.TRAVEL }
+        )
+        Destination.EXPENSES -> listOf(
+            QuickActionItem("Add expense", "Record a purchase", Icons.Default.Payments) { showExpenseDialog = true }
+        )
+        Destination.STUDY -> listOf(
+            QuickActionItem("Study session", "Log time spent learning", Icons.AutoMirrored.Filled.MenuBook) { showStudyDialog = true }
+        )
+        Destination.TASKS -> listOf(
+            QuickActionItem("Add task", "Capture something to do", Icons.Default.CheckCircle) { showTaskDialog = true }
+        )
+        Destination.SCHEDULE -> listOf(
+            QuickActionItem("Add class", "Add a weekly class", Icons.Default.Event) { showClassDialog = true }
+        )
+        else -> emptyList()
+    }
+    BackHandler(enabled = showQuickActions || (selected != Destination.HOME && !drawerState.isOpen)) {
+        if (showQuickActions) showQuickActions = false else selected = Destination.HOME
     }
     ModalNavigationDrawer(
+        modifier = Modifier.fillMaxSize(),
         drawerState = drawerState,
         drawerContent = {
             val settings by vm.settings.collectAsState(initial = null)
@@ -118,93 +182,173 @@ private fun SmartLifeManagerApp(vm: MainViewModel = viewModel()) {
             )
         }
     ) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(selected.label, maxLines = 1) },
-                navigationIcon = {
-                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                        Icon(Icons.Default.Menu, contentDescription = "Open menu")
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val useNavigationRail = maxWidth >= 840.dp
+            Row(Modifier.fillMaxSize()) {
+                if (useNavigationRail) {
+                    NavigationRail(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        header = {
+                            Surface(
+                                modifier = Modifier.padding(vertical = 12.dp).size(42.dp),
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Icon(
+                                    Icons.Default.AutoAwesome,
+                                    contentDescription = "Smart Life Manager",
+                                    modifier = Modifier.padding(11.dp),
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                    ) {
+                        primaryDestinations.forEach { destination ->
+                            NavigationRailItem(
+                                selected = selected == destination,
+                                onClick = { selected = destination },
+                                icon = { Icon(destination.icon, contentDescription = destination.label) },
+                                label = { Text(destination.label) },
+                                alwaysShowLabel = false
+                            )
+                        }
+                        NavigationRailItem(
+                            selected = false,
+                            onClick = { scope.launch { drawerState.open() } },
+                            icon = { Icon(Icons.Default.MoreHoriz, contentDescription = "More destinations") },
+                            label = { Text("More") },
+                            alwaysShowLabel = false
+                        )
                     }
                 }
-            )
-        },
-        bottomBar = {
-            NavigationBar(modifier = Modifier.height(76.dp), tonalElevation = 2.dp) {
-                listOf(Destination.HOME, Destination.EXPENSES, Destination.STUDY, Destination.SCHEDULE).forEach { destination ->
-                    NavigationBarItem(
-                        selected = selected == destination,
-                        onClick = { selected = destination },
-                        icon = { Icon(destination.icon, destination.label, Modifier.size(25.dp)) },
-                        label = { Text(destination.label, maxLines = 1, softWrap = false, fontSize = 12.sp) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+                Scaffold(
+                    modifier = Modifier.weight(1f),
+                    containerColor = MaterialTheme.colorScheme.background,
+                    topBar = {
+                        TopAppBar(
+                            title = { Text(if (selected == Destination.HOME) "Your overview" else selected.label, maxLines = 1) },
+                            navigationIcon = {
+                                IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                    Icon(Icons.Default.Menu, contentDescription = "Open menu")
+                                }
+                            },
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = MaterialTheme.colorScheme.background,
+                                titleContentColor = MaterialTheme.colorScheme.onBackground
+                            )
                         )
-                    )
-                }
-            }
-        },
-        floatingActionButton = {
-            if (selected == Destination.HOME || selected == Destination.EXPENSES || selected == Destination.TASKS || selected == Destination.HABITS || selected == Destination.SCHEDULE || selected == Destination.BATCH || selected == Destination.TRAVEL) {
-                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (fabExpanded) {
-                        QuickAction("Add expense", Icons.Default.Payments) { showExpenseDialog = true; fabExpanded = false }
-                        QuickAction("Add task", Icons.Default.CheckCircle) { showTaskDialog = true; fabExpanded = false }
-                        QuickAction("Add class", Icons.Default.Event) { showClassDialog = true; fabExpanded = false }
-                        QuickAction("Add study session", Icons.AutoMirrored.Filled.MenuBook) { showStudyDialog = true; fabExpanded = false }
-                        QuickAction("Add habit", Icons.Default.Repeat) { selected = Destination.HABITS; fabExpanded = false }
-                        QuickAction("Add note", Icons.Default.EditNote) { selected = Destination.NOTES; fabExpanded = false }
-                        QuickAction("Add travel/ticket", Icons.Default.FlightTakeoff) { selected = Destination.TRAVEL; fabExpanded = false }
-                        if (selected == Destination.BATCH) {
-                            QuickAction("Publish batch update", Icons.Default.Campaign) { showBatchDialog = true; fabExpanded = false }
+                    },
+                    bottomBar = {
+                        if (!useNavigationRail) {
+                            NavigationBar(
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                tonalElevation = 0.dp
+                            ) {
+                                primaryDestinations.forEach { destination ->
+                                    NavigationBarItem(
+                                        selected = selected == destination,
+                                        onClick = { selected = destination },
+                                        icon = { Icon(destination.icon, contentDescription = destination.label) },
+                                        label = { Text(destination.label, maxLines = 1, softWrap = false) },
+                                        alwaysShowLabel = true
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    floatingActionButton = {
+                        if (quickActions.isNotEmpty()) {
+                            ExtendedFloatingActionButton(
+                                onClick = { showQuickActions = true },
+                                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                                text = { Text("Add") }
+                            )
                         }
                     }
-                    FloatingActionButton(onClick = { fabExpanded = !fabExpanded }) {
-                        Icon(if (fabExpanded) Icons.Default.Close else Icons.Default.Add, "Quick actions")
+                ) { padding ->
+                    Box(Modifier.padding(padding).fillMaxSize()) {
+                        AnimatedContent(
+                            targetState = selected,
+                            transitionSpec = { fadeIn() togetherWith fadeOut() },
+                            label = "destination transition"
+                        ) { destination ->
+                            screenStateHolder.SaveableStateProvider(destination) {
+                                when (destination) {
+                                    Destination.HOME -> Dashboard(
+                                        vm,
+                                        onAddExpense = { showExpenseDialog = true },
+                                        onStudy = { selected = Destination.STUDY },
+                                        onAddTask = { showTaskDialog = true },
+                                        onAddClass = { showClassDialog = true },
+                                        onAddStudy = { showStudyDialog = true }
+                                    )
+                                    Destination.EXPENSES -> ExpensesScreen(vm)
+                                    Destination.STUDY -> StudyManagementScreen(vm)
+                                    Destination.FOCUS -> FocusScreen(vm)
+                                    Destination.TASKS -> TasksScreen(vm)
+                                    Destination.HABITS -> HabitTrackerScreen(vm)
+                                    Destination.CP -> CpTrackerScreen(vm)
+                                    Destination.SCHEDULE -> CalendarScreen(vm)
+                                    Destination.ACADEMIC -> AcademicScreen(vm)
+                                    Destination.REPORTS -> ReportsScreen(vm)
+                                    Destination.ANALYTICS -> AnalyticsScreen(vm)
+                                    Destination.BATCH -> BatchSyncScreen(vm)
+                                    Destination.ASSISTANT -> AssistantScreen(vm)
+                                    Destination.NOTES -> DocumentsScreen(vm)
+                                    Destination.TRAVEL -> TravelScreen(vm)
+                                    Destination.LOCATION -> LocationSharingScreen()
+                                    Destination.NOTIFICATIONS -> NotificationsScreen(vm)
+                                    Destination.SETTINGS -> SettingsScreen(vm)
+                                    Destination.ABOUT -> AboutScreen()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (showQuickActions && quickActions.isNotEmpty()) {
+                    ModalBottomSheet(
+                        onDismissRequest = { showQuickActions = false },
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ) {
+                        Column(
+                            Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())
+                                .padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("Quick actions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                            quickActions.forEach { action ->
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        showQuickActions = false
+                                        action.onClick()
+                                    },
+                                    shape = MaterialTheme.shapes.medium,
+                                    color = MaterialTheme.colorScheme.surfaceContainerLow
+                                ) {
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(action.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(Modifier.width(14.dp))
+                                        Column {
+                                            Text(action.label, style = MaterialTheme.typography.titleSmall)
+                                            Text(action.description, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-    ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            when (selected) {
-                Destination.HOME -> Dashboard(
-                    vm,
-                    onAddExpense = { showExpenseDialog = true },
-                    onStudy = { selected = Destination.STUDY },
-                    onAddTask = { showTaskDialog = true },
-                    onAddClass = { showClassDialog = true },
-                    onAddStudy = { showStudyDialog = true }
-                )
-                Destination.EXPENSES -> ExpensesScreen(vm)
-                Destination.STUDY -> StudyManagementScreen(vm)
-                Destination.FOCUS -> FocusScreen(vm)
-                Destination.TASKS -> TasksScreen(vm)
-                Destination.HABITS -> HabitTrackerScreen(vm)
-                Destination.CP -> CpTrackerScreen(vm)
-                Destination.SCHEDULE -> CalendarScreen(vm)
-                Destination.ACADEMIC -> AcademicScreen(vm)
-                Destination.REPORTS -> ReportsScreen(vm)
-                Destination.ANALYTICS -> AnalyticsScreen(vm)
-                Destination.BATCH -> BatchSyncScreen(vm)
-                Destination.ASSISTANT -> AssistantScreen(vm)
-                Destination.NOTES -> DocumentsScreen(vm)
-                Destination.TRAVEL -> TravelScreen(vm)
-                Destination.NOTIFICATIONS -> NotificationsScreen(vm)
-                Destination.SETTINGS -> SettingsScreen(vm)
-                Destination.ABOUT -> AboutScreen()
-            }
-
-        }
-    }
-    if (showExpenseDialog) AddExpenseDialog(vm) { showExpenseDialog = false }
-    if (showTaskDialog) AddTaskDialog(vm) { showTaskDialog = false }
-    if (showClassDialog) AddClassDialog(vm) { showClassDialog = false }
-    if (showStudyDialog) AddStudySessionDialog(vm) { showStudyDialog = false }
-    if (showBatchDialog) AddBatchItemDialog(vm) { showBatchDialog = false }
+        if (showExpenseDialog) AddExpenseDialog(vm) { showExpenseDialog = false }
+        if (showTaskDialog) AddTaskDialog(vm) { showTaskDialog = false }
+        if (showClassDialog) AddClassDialog(vm) { showClassDialog = false }
+        if (showStudyDialog) AddStudySessionDialog(vm) { showStudyDialog = false }
     }
 }
 
@@ -276,6 +420,7 @@ private fun AppDrawer(
             drawerItem(Destination.HABITS, onDestinationSelected, selected)
             drawerItem(Destination.FOCUS, onDestinationSelected, selected)
             drawerItem(Destination.TRAVEL, onDestinationSelected, selected)
+            drawerItem(Destination.LOCATION, onDestinationSelected, selected)
 
             drawerSectionLabel("ORGANIZE")
             drawerItem(Destination.NOTES, onDestinationSelected, selected)
@@ -522,6 +667,8 @@ private fun NotificationsScreen(vm: MainViewModel) {
 private fun SettingsScreen(vm: MainViewModel) {
     val settings by vm.settings.collectAsState(initial = null)
     val cloudUser by vm.cloudUser.collectAsState()
+    var profileName by rememberSaveable(settings?.userName) { mutableStateOf(settings?.userName.orEmpty()) }
+    var profileFeedback by remember { mutableStateOf<String?>(null) }
     var accountEmail by rememberSaveable { mutableStateOf("") }
     var accountPassword by remember { mutableStateOf("") }
     var createAccount by rememberSaveable { mutableStateOf(false) }
@@ -530,8 +677,36 @@ private fun SettingsScreen(vm: MainViewModel) {
     ScreenColumn {
         Text("Settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         MetricCard("Profile", Modifier.fillMaxWidth()) {
-            Text(settings?.userName ?: "Your name", fontWeight = FontWeight.SemiBold)
+            OutlinedTextField(
+                value = profileName,
+                onValueChange = { profileName = it; profileFeedback = null },
+                label = { Text("Your name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Button(
+                onClick = {
+                    vm.updateUserName(profileName)
+                    profileFeedback = "Profile name updated."
+                },
+                enabled = profileName.isNotBlank() && profileName.trim() != settings?.userName,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Save profile") }
+            profileFeedback?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
             Text("Monthly budget: ৳${"%.0f".format(settings?.monthlyBudgetAmount ?: 15000.0)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        MetricCard("Appearance", Modifier.fillMaxWidth()) {
+            Text("Choose a theme that feels comfortable at any time of day.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val themeOptions = listOf("System", "Light", "Dark")
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                themeOptions.forEachIndexed { index, option ->
+                    SegmentedButton(
+                        selected = (settings?.darkModeOption ?: "System") == option,
+                        onClick = { vm.setDarkModeOption(option) },
+                        shape = SegmentedButtonDefaults.itemShape(index, themeOptions.size)
+                    ) { Text(option) }
+                }
+            }
         }
         Text("AI account", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         MetricCard("Firebase sign-in", Modifier.fillMaxWidth()) {
@@ -881,6 +1056,7 @@ private fun ExpensesScreen(vm: MainViewModel) {
     var showBudgetDialog by remember { mutableStateOf(false) }
     var showGoalDialog by remember { mutableStateOf(false) }
     var showCategoryDialog by remember { mutableStateOf(false) }
+    var expensePendingDelete by remember { mutableStateOf<ExpenseEntity?>(null) }
     val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
     val periodStart = expensePeriodStartDate(period, System.currentTimeMillis())
     val visibleExpenses = expenses.filter {
@@ -898,14 +1074,21 @@ private fun ExpensesScreen(vm: MainViewModel) {
             }
             Icon(Icons.Default.AccountBalance, null, tint = MaterialTheme.colorScheme.primary)
         }
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             listOf("All", "Personal", "Family", "Children", "Academic").forEach { option ->
-                SegmentedButton(selected = ledger == option, onClick = { ledger = option }, shape = SegmentedButtonDefaults.itemShape(0, 5)) { Text(option) }
+                FilterChip(selected = ledger == option, onClick = { ledger = option }, label = { Text(option) })
             }
         }
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            listOf("Day", "Week", "Month", "Year").forEach { option ->
-                SegmentedButton(selected = period == option, onClick = { period = option }, shape = SegmentedButtonDefaults.itemShape(0, 4)) { Text(option) }
+            listOf("Day", "Week", "Month", "Year").forEachIndexed { index, option ->
+                SegmentedButton(
+                    selected = period == option,
+                    onClick = { period = option },
+                    shape = SegmentedButtonDefaults.itemShape(index, 4)
+                ) { Text(option) }
             }
         }
         MetricCard("${when (period) { "Day" -> "Daily"; "Week" -> "Weekly"; "Month" -> "Monthly"; else -> "Yearly" }} report", Modifier.fillMaxWidth()) {
@@ -974,13 +1157,29 @@ private fun ExpensesScreen(vm: MainViewModel) {
                         Text(expense.dateString, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text("৳${"%.0f".format(expense.amount)}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    IconButton(onClick = { vm.deleteExpense(expense) }) { Icon(Icons.Default.Delete, "Delete expense") }
+                    IconButton(onClick = { expensePendingDelete = expense }) {
+                        Icon(Icons.Default.Delete, "Delete ${expense.category} expense")
+                    }
                 }
             }
         }
         if (showGoalDialog) AddSavingsGoalDialog(vm) { showGoalDialog = false }
         if (showBudgetDialog) AddBudgetDialog(vm, budget) { showBudgetDialog = false }
         if (showCategoryDialog) AddCategoryDialog(vm) { showCategoryDialog = false }
+    }
+    expensePendingDelete?.let { expense ->
+        AlertDialog(
+            onDismissRequest = { expensePendingDelete = null },
+            title = { Text("Delete this expense?") },
+            text = { Text("${expense.category} · ৳${"%.0f".format(expense.amount)} will be removed from your history.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteExpense(expense)
+                    expensePendingDelete = null
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { expensePendingDelete = null }) { Text("Keep expense") } }
+        )
     }
 }
 
@@ -1033,21 +1232,37 @@ private fun StudyScreen(vm: MainViewModel) {
 
 @Composable
 private fun TasksScreen(vm: MainViewModel) {
-        val tasks by vm.tasks.collectAsState(initial = emptyList())
-        ScreenColumn {
-            Text("Tasks", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("${tasks.count { !it.isCompleted }} remaining", color = MaterialTheme.colorScheme.primary)
-            if (tasks.isEmpty()) EmptyState("No tasks yet")
-            LazyColumn(Modifier.heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(tasks, key = { it.id }) { task ->
-                    ListCard {
-                        Checkbox(task.isCompleted, { vm.toggleTask(task) })
-                        Column(Modifier.weight(1f)) {
-                            Text(task.title, fontWeight = FontWeight.Bold)
-                            if (task.description.isNotBlank()) Text(task.description, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("${task.priority} priority · due tomorrow", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        IconButton(onClick = { vm.deleteTask(task) }) { Icon(Icons.Default.Delete, "Delete task") }
+    val tasks by vm.tasks.collectAsState(initial = emptyList())
+    var showCompleted by rememberSaveable { mutableStateOf(false) }
+    val visibleTasks = tasks
+        .filter { it.isCompleted == showCompleted }
+        .sortedBy { it.deadlineMillis }
+    ScreenColumn {
+        Text("Tasks", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("${tasks.count { !it.isCompleted }} still to do", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            listOf("To do", "Completed").forEachIndexed { index, label ->
+                SegmentedButton(
+                    selected = showCompleted == (index == 1),
+                    onClick = { showCompleted = index == 1 },
+                    shape = SegmentedButtonDefaults.itemShape(index, 2)
+                ) { Text("$label · ${if (index == 0) tasks.count { !it.isCompleted } else tasks.count { it.isCompleted }}") }
+            }
+        }
+        if (visibleTasks.isEmpty()) {
+            EmptyState(if (showCompleted) "Completed tasks will appear here." else "Nothing on your list yet. Add a task when something needs your attention.")
+        }
+        LazyColumn(Modifier.heightIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(visibleTasks, key = { it.id }) { task ->
+                ListCard {
+                    Checkbox(task.isCompleted, { vm.toggleTask(task) })
+                    Column(Modifier.weight(1f)) {
+                        Text(task.title, fontWeight = FontWeight.SemiBold)
+                        if (task.description.isNotBlank()) Text(task.description, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val due = SimpleDateFormat("EEE, MMM d · h:mm a", Locale.getDefault()).format(Date(task.deadlineMillis))
+                        Text("${task.priority} priority · due $due", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = { vm.deleteTask(task) }) { Icon(Icons.Default.Delete, "Delete ${task.title}") }
                 }
             }
         }
@@ -1207,7 +1422,7 @@ private fun AddTravelTripDialog(
         title = { Text("Add travel ticket") },
         text = {
             Column(
-                Modifier.fillMaxWidth().heightIn(max = 560.dp),
+                Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(7.dp)
             ) {
                 OutlinedTextField(title, { title = it }, label = { Text("Trip name (e.g. Dhaka → Jamalpur)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -1294,22 +1509,11 @@ private fun BatchSyncScreen(vm: MainViewModel) {
                         )
                     }
                     SmartBatchBroadcastPanel(vm, settings?.isClassRepresentative == true)
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                        types.take(3).forEachIndexed { index, type ->
-                            SegmentedButton(
-                                selected = selectedType == type,
-                                onClick = { selectedType = type },
-                                shape = SegmentedButtonDefaults.itemShape(index, 2)
-                            ) { Text(type, maxLines = 1) }
-                        }
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        types.drop(3).take(3).forEach { type ->
-                            FilterChip(selected = selectedType == type, onClick = { selectedType = type }, label = { Text(type) })
-                        }
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        types.drop(6).forEach { type ->
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        types.forEach { type ->
                             FilterChip(selected = selectedType == type, onClick = { selectedType = type }, label = { Text(type) })
                         }
                     }
@@ -2239,14 +2443,6 @@ private fun SetGoalDialog(vm: MainViewModel, dismiss: () -> Unit) {
 }
 
 @Composable
-private fun QuickAction(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, action: () -> Unit) {
-    SmallFloatingActionButton(onClick = action, containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
-        Icon(icon, label)
-    }
-    Text(label, Modifier.padding(end = 48.dp), style = MaterialTheme.typography.labelSmall)
-}
-
-@Composable
 private fun SummaryCard(
     label: String,
     value: String,
@@ -2254,12 +2450,48 @@ private fun SummaryCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     modifier: Modifier
 ) {
-    Card(modifier, shape = RoundedCornerShape(18.dp)) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Icon(icon, label, tint = MaterialTheme.colorScheme.primary)
-            Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("$label · $detail", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Card(
+        modifier.heightIn(min = 104.dp),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(16.dp)) {
+            val compact = maxWidth < 200.dp
+            if (compact) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SummaryIcon(icon, label)
+                        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SummaryIcon(icon, label)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                    }
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun SummaryIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String) {
+    Surface(
+        modifier = Modifier.size(40.dp),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        Icon(icon, label, Modifier.padding(10.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
     }
 }
 
@@ -2313,21 +2545,99 @@ internal fun expensePeriodStartDate(period: String, nowMillis: Long): String {
 }
 
 @Composable internal fun ScreenColumn(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        content = content
-    )
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val horizontalPadding = if (maxWidth > 840.dp) {
+            ((maxWidth - 760.dp) / 2).coerceAtLeast(24.dp)
+        } else {
+            20.dp
+        }
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                .padding(horizontal = horizontalPadding, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            content = content
+        )
+    }
 }
+
 @Composable internal fun MetricCard(title: String, modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Card(modifier, shape = RoundedCornerShape(20.dp)) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary); content() } }
+    Card(
+        modifier,
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            content()
+        }
+    }
 }
-@Composable internal fun ListCard(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) { Card(modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Row(Modifier.padding(14.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, content = content) } }
-@Composable private fun Metric(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(icon, null, tint = MaterialTheme.colorScheme.primary); Text(value, fontWeight = FontWeight.Bold); Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-@Composable internal fun ActionButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, action: () -> Unit, modifier: Modifier) { Button(onClick = action, modifier = modifier) { Icon(icon, null); Spacer(Modifier.width(5.dp)); Text(label) } }
-@Composable private fun ProgressRow(label: String, percent: Int) { Text("$label  $percent%"); LinearProgressIndicator({ percent / 100f }, Modifier.fillMaxWidth()) }
-@Composable private fun ReportRow(label: String, value: String) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(label); Text(value, fontWeight = FontWeight.Bold) } }
-@Composable internal fun EmptyState(text: String) { Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+
+@Composable internal fun ListCard(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+    Card(
+        modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, content = content)
+    }
+}
+
+@Composable private fun Metric(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+        Text(value, fontWeight = FontWeight.SemiBold)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable internal fun ActionButton(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, action: () -> Unit, modifier: Modifier) {
+    Button(onClick = action, modifier = modifier, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
+        Icon(icon, null, Modifier.size(18.dp))
+        Spacer(Modifier.width(5.dp))
+        Text(label, maxLines = 1)
+    }
+}
+
+@Composable private fun ProgressRow(label: String, percent: Int) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label)
+            Text("$percent%", fontWeight = FontWeight.SemiBold)
+        }
+        LinearProgressIndicator({ percent.coerceIn(0, 100) / 100f }, Modifier.fillMaxWidth())
+    }
+}
+
+@Composable private fun ReportRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable internal fun EmptyState(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Row(
+            Modifier.padding(horizontal = 20.dp, vertical = 22.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                modifier = Modifier.size(42.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Icon(Icons.Default.Inbox, contentDescription = null, modifier = Modifier.padding(10.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            }
+            Text(text, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
 private fun formatMinutes(minutes: Int) = if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "${minutes}m"
 private fun formatSeconds(seconds: Long) = "%02d:%02d".format(seconds / 60, seconds % 60)
 private fun daysUntilAcademic(date: String): Int =

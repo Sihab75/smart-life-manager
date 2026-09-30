@@ -23,6 +23,10 @@ The app is **offline-first**: all data is persisted locally with a **Room** data
 
 It was built as a Computer Science & Engineering coursework/portfolio project, with an emphasis on a broad, realistic feature set rather than a single narrow use case.
 
+## UI direction
+
+The Compose interface uses a quiet evergreen-and-mint accent palette over warm neutral surfaces, with a complete dark palette and a consistent, readable type scale. Core destinations stay in a four-item bottom bar on phones; wider windows switch to a navigation rail, while secondary tools remain grouped in the destination drawer. Shared cards, spacing, and empty states keep the many features cohesive without forcing every screen into the same layout. The selected System / Light / Dark preference is stored with the local user settings.
+
 ---
 
 ## Key Features
@@ -224,7 +228,7 @@ val assistantBaseUrl = providers.gradleProperty("ASSISTANT_BASE_URL")
     .orElse("http://10.0.2.2:3000") // default: Android emulator → localhost:3000
 ```
 
-Set `ASSISTANT_BASE_URL` in your `gradle.properties` (or as a `-P` flag) to point at your deployed backend's HTTPS URL. For a physical device or a deployed backend, do **not** use `10.0.2.2` — that address only resolves to `localhost` from inside the Android emulator.
+Set `ASSISTANT_BASE_URL` in your `gradle.properties` (or as a `-P` flag) to point at your deployed backend's HTTPS URL. `10.0.2.2` only resolves to localhost inside the Android emulator, and this app disables cleartext HTTP; use an HTTPS backend/tunnel for Android and browser location-sharing tests.
 
 The backend itself is configured via a `.env` file (see `backend/.env.example`):
 
@@ -290,9 +294,9 @@ npm install
 npm start               # listens on PORT (default 3000)
 ```
 
-For the Android emulator, the default `http://10.0.2.2:3000` already points at this local server. Deploy the backend to any Node-compatible host for real devices, and point `ASSISTANT_BASE_URL` at its HTTPS URL.
+For command-line backend tests, the local server listens on port 3000. The Android app requires HTTPS because cleartext HTTP is disabled in its network security configuration; point `ASSISTANT_BASE_URL` at the deployed HTTPS service (or an HTTPS development tunnel).
 
-Both AI endpoints require a Firebase ID token and the API applies an in-memory limit of 20 requests per IP per minute. Sign in or create an account from **Settings** in the Android app. The backend needs `FIREBASE_PROJECT_ID` and Firebase Admin Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` may point to a securely mounted service-account file); never commit service-account credentials. Set `TRUST_PROXY_HOPS` to the exact number of trusted reverse proxies in front of the backend (for example, `1` behind one trusted proxy), or leave it at `0` for direct connections. The rate limit is per server process; use a shared rate limiter when horizontally scaling.
+The AI endpoints require a Firebase ID token and the API applies an in-memory limit of 20 requests per IP per minute. Sign in or create an account from **Settings** in the Android app. The backend needs `FIREBASE_PROJECT_ID` and Firebase Admin Application Default Credentials (`GOOGLE_APPLICATION_CREDENTIALS` may point to a securely mounted service-account file); never commit service-account credentials. Set `TRUST_PROXY_HOPS` to the exact number of trusted reverse proxies in front of the backend (for example, `1` behind one trusted proxy), or leave it at `0` for direct connections. The rate limit is per server process; use a shared rate limiter when horizontally scaling.
 
 ---
 
@@ -311,6 +315,53 @@ The Android app includes Firebase Authentication, Google credential sign-in, Fir
 
 ---
 
+## Consent-Based Location Sharing
+
+The Android app adds **Location Sharing** to the Personal section of the navigation drawer. A requester signs into the existing Firebase account, verifies their own Bangladesh phone number with Firebase Phone Auth, then enters the recipient's number. The app creates a 15-minute request through the authenticated backend and opens an SMS draft containing a one-time link; the user must send the SMS. If a matching app account has an FCM token, it also receives a generic review notification with that consent link (never coordinates). Recipients do not need the app. On the web page, the recipient verifies possession of the requested phone using a Firebase SMS code; knowing the link alone is not enough to approve, upload coordinates, decline, or stop a share. Only after verification and an explicit **Share my location** press does the browser request geolocation. Browser permission denial sends no coordinates. Updates are sent only while the consent page is visible and active; users can stop sharing from that page.
+
+Coordinates are written and read only by the Firebase Admin backend. Firestore client rules deny all direct reads and writes to location requests, shares, and request locks. The Android app can read a requester's own status only through authenticated backend endpoints, and receives coordinates only for that request while it is approved and unexpired. Sharing links contain 256 bits of random token material in the URL fragment (not in the HTTP path or referrer); Firestore stores only its SHA-256 digest. A server-side HMAC secret protects phone-number lookup/deduplication hashes. Precise coordinates are not logged or included in notifications. The map action opens the installed maps app via Android's `geo:` intent; no map SDK or map API key is required.
+
+### Firebase configuration
+
+1. Configure the existing Firebase Android app and place its `google-services.json` at `app/google-services.json`. Gradle conditionally applies the Google Services plugin when that file exists.
+2. Add a **Web app** in the same Firebase project. Set backend `PUBLIC_FIREBASE_API_KEY`, `PUBLIC_FIREBASE_AUTH_DOMAIN`, and `PUBLIC_FIREBASE_APP_ID` from its Firebase web config. These values are public client configuration, not Admin credentials; restrict the API key to Firebase Authentication APIs and your Render hostname.
+3. Enable **Email/Password**, **Google**, and **Phone** sign-in in Firebase Authentication. Add the Render `*.onrender.com` hostname under Authentication **Authorized domains**. Configure Android SHA-1/SHA-256 fingerprints as needed for Phone Auth/Play Integrity.
+4. Create Firestore, then deploy the rules and required request-history index from this repository: `firebase deploy --only firestore --project YOUR_FIREBASE_PROJECT_ID`. These rules preserve the app's self-owned `users/{uid}` profile/token writes and deny client access to all location collections.
+5. Give the backend service account Firebase Authentication token-verification, Firestore, and FCM-send access. Never put its JSON key in the repository or Android app.
+6. Requesters must link a verified Firebase phone number in the Location Sharing screen. Phone Auth may be subject to Firebase SMS quotas and billing settings. The backend uses that verified claim to reject a request to the requester's own number. Recipient phone matching and verification happen server-side; raw target phone numbers are not saved with the request. Unregistered recipients can verify the SMS number in a browser without installing the app.
+
+### Deploy the HTTPS consent page for free
+
+The web consent page is served by the existing Node service, so it gets the same free HTTPS `*.onrender.com` address without buying a domain or creating a second backend.
+
+1. Push the repository to GitHub and create/deploy a **Blueprint** in Render using the checked-in `render.yaml`. It defines the existing backend as a **Free** web service. Wait for Render to show its generated HTTPS service URL.
+2. In the service's Environment settings, set `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON`, and the public web-app config variables `PUBLIC_FIREBASE_API_KEY`, `PUBLIC_FIREBASE_AUTH_DOMAIN`, and `PUBLIC_FIREBASE_APP_ID` (paste the service-account JSON as a secret environment variable, not into a file in the repository).
+3. Generate a unique secret with at least 32 random bytes (for example, `openssl rand -hex 32`) and set it as `PHONE_LOOKUP_HMAC_SECRET`. Set `PUBLIC_BASE_URL` to the exact generated HTTPS origin, such as `https://your-service.onrender.com` (no path or trailing slash). Keep `TRUST_PROXY_HOPS=1` for Render's proxy. Save and redeploy.
+4. Confirm `https://your-service.onrender.com/health` returns `{"ok":true}` and `/location-share` loads the consent page. Render provides managed TLS and the free HTTPS subdomain.
+5. In Android Studio, provide `app/google-services.json` and set Gradle property `ASSISTANT_BASE_URL=https://your-service.onrender.com` (in `~/.gradle/gradle.properties` or as `-PASSISTANT_BASE_URL=...`). Build/install the app and sign into Firebase. Use the deployed HTTPS service for the full Android-to-browser consent flow.
+
+Required backend environment variables for location sharing are `FIREBASE_PROJECT_ID`, `FIREBASE_SERVICE_ACCOUNT_JSON` (or locally configured Application Default Credentials), `PHONE_LOOKUP_HMAC_SECRET`, `PUBLIC_BASE_URL`, `PUBLIC_FIREBASE_API_KEY`, `PUBLIC_FIREBASE_AUTH_DOMAIN`, and `PUBLIC_FIREBASE_APP_ID`. The Firebase Web API key/app ID are public configuration, not service-account secrets. Existing AI provider keys remain optional for location sharing. Render's free service can spin down when idle, so the first request after inactivity may take longer. Do not test browser geolocation from a non-secure LAN HTTP address; use the deployed HTTPS Render URL (or an HTTPS development tunnel).
+
+### Run and test locally
+
+From `backend`, copy `.env.example` to `.env`, fill in the Firebase project/web-app values and a random `PHONE_LOOKUP_HMAC_SECRET`, then use Application Default Credentials locally (or set `FIREBASE_SERVICE_ACCOUNT_JSON` securely). On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+# Put the generated value and Firebase values into backend/.env.
+$env:GOOGLE_APPLICATION_CREDENTIALS = 'C:\secure\firebase-service-account.json'
+npm.cmd install
+npm.cmd test
+npm.cmd start
+```
+
+This exercises the backend locally. A local browser at `http://localhost:3000` can use geolocation, but the Android app disables cleartext traffic; use the deployed HTTPS URL for Android-to-backend and real-device browser consent testing. On Android, sign in from **Settings**, open **Location Sharing**, verify the requester's own Firebase phone by SMS, enter another Bangladesh phone number, and send the SMS draft. On the recipient device, open the link, verify the phone number that received the request, inspect the requester/expiry, then select **Share my location** and allow the browser prompt (or choose **Decline**). Android refreshes request status and exposes a map action only while an approved share is active. Check denied browser permission, **Stop sharing**, and the 15-minute expiry; location is never available from a phone number or link alone.
+
+The backend keeps a single latest coordinate (not a trail) and minimal request event metadata. Endpoint authorization checks server timestamps on every read/write; `locationShares` documents are unreadable after expiry even before cleanup. For automatic storage cleanup, enable Firestore TTL on `locationShares.expiresAt` in the Firebase console; TTL deletion is eventual and is not relied on for authorization. This feature uses SMS drafts rather than an SMS provider or FCM, and no precise coordinates are sent in a notification.
+
+---
+
 ## Permissions
 
 | Permission | Reason |
@@ -323,7 +374,7 @@ The Android app includes Firebase Authentication, Google credential sign-in, Fir
 
 ## Testing
 
-Local unit tests cover schedule parsing/conflicts, calendar-period date ranges, and productivity calculator edge cases. The Android instrumented test remains the default package-name smoke test. Firebase-backed sign-in and API token verification require project credentials and are not exercised by the local automated tests.
+Local unit tests cover Bangladesh number normalization, schedule parsing/conflicts, calendar-period date ranges, and productivity calculator edge cases. Backend tests cover secure token handling, request/consent/decline/revoke/expiry authorization with an isolated Firestore fake, FCM payload privacy, and browser location-denial behavior. Firebase-backed sign-in, actual Firestore rules evaluation, and SMS/FCM delivery require project credentials and are not exercised by local automated tests.
 
 ---
 
@@ -345,7 +396,7 @@ Local unit tests cover schedule parsing/conflicts, calendar-period date ranges, 
 ## Known Limitations
 
 - **Batch Sync delivery**: only the **In-App** notification channel actually delivers; **WhatsApp** and **Messenger** channels are wired into `BroadcastService` but always return a `Failed` status, since no real messaging integration is configured.
-- **No automated test coverage**: only placeholder template tests are present.
+- **Firebase integration tests**: actual Firebase rules, phone SMS verification, and FCM delivery require a configured Firebase project and are not covered by local tests.
 - **Firebase is optional but required for**: cross-device sync, cloud backup of receipts/tickets, and push notifications — the app is fully usable without it, purely on local Room storage.
 - **AI Assistant requires backend deployment** for Gemini/OpenAI/DeepSeek responses; without it (or without configured provider keys), the app transparently falls back to the local, rule-based offline assistant.
 - **No app store release / signing configuration** is included in this repository.

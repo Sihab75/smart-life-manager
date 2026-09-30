@@ -49,10 +49,16 @@ fun AcademicScreen(vm: MainViewModel) {
             EmptyState("No semester yet. Create one to start your academic routine.")
             Button(onClick = { showSemester = true }, Modifier.fillMaxWidth()) { Text("Create semester") }
         } else {
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                semesters.take(3).forEachIndexed { index, semester ->
-                    SegmentedButton(semester.id == selected?.id, { selectedId = semester.id },
-                        SegmentedButtonDefaults.itemShape(index, semesters.take(3).size)) { Text(semester.name, maxLines = 1) }
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                semesters.forEach { semester ->
+                    FilterChip(
+                        selected = semester.id == selected?.id,
+                        onClick = { selectedId = semester.id },
+                        label = { Text(semester.name) }
+                    )
                 }
             }
             selected?.let { AcademicSemesterContent(vm, it) }

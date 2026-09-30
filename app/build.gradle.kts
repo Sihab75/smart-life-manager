@@ -6,6 +6,11 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.google.services) apply false
+}
+
+if (file("google-services.json").isFile) {
+    pluginManager.apply("com.google.gms.google-services")
 }
 
 android {

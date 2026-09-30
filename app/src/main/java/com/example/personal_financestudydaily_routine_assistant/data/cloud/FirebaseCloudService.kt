@@ -1,5 +1,6 @@
 package com.example.personal_financestudydaily_routine_assistant.data.cloud
 
+import android.app.Activity
 import android.content.Context
 import android.net.Uri
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
@@ -8,17 +9,22 @@ import com.google.firebase.auth.AuthCredential
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.PhoneAuthOptions
+import com.google.firebase.auth.PhoneAuthCredential
+import com.google.firebase.auth.PhoneAuthProvider
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.tasks.await
+import java.util.concurrent.TimeUnit
 
 data class CloudUser(
     val uid: String,
     val displayName: String?,
     val email: String?,
-    val photoUrl: String?
+    val photoUrl: String?,
+    val phoneNumber: String?
 )
 
 class FirebaseCloudService(context: Context) {
@@ -34,8 +40,44 @@ class FirebaseCloudService(context: Context) {
     val currentUser: CloudUser?
         get() = auth?.currentUser?.toCloudUser()
 
-    suspend fun assistantIdToken(): String? =
-        auth?.currentUser?.getIdToken(false)?.await()?.token
+    suspend fun assistantIdToken(forceRefresh: Boolean = false): String? =
+        auth?.currentUser?.getIdToken(forceRefresh)?.await()?.token
+
+    fun startPhoneVerification(
+        activity: Activity,
+        phoneNumber: String,
+        onCodeSent: (String) -> Unit,
+        onVerified: (AuthCredential) -> Unit,
+        onFailure: (Exception) -> Unit
+    ) {
+        val firebaseAuth = auth ?: error("Firebase is not configured. Add google-services.json.")
+        check(firebaseAuth.currentUser != null) { "Sign in from Settings before verifying your phone." }
+        val callbacks = object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
+            override fun onVerificationCompleted(credential: PhoneAuthCredential) = onVerified(credential)
+            override fun onVerificationFailed(error: com.google.firebase.FirebaseException) = onFailure(error)
+            override fun onCodeSent(
+                verificationId: String,
+                token: PhoneAuthProvider.ForceResendingToken
+            ) = onCodeSent(verificationId)
+        }
+        PhoneAuthProvider.verifyPhoneNumber(
+            PhoneAuthOptions.newBuilder(firebaseAuth)
+                .setPhoneNumber(phoneNumber)
+                .setTimeout(60L, TimeUnit.SECONDS)
+                .setActivity(activity)
+                .setCallbacks(callbacks)
+                .build()
+        )
+    }
+
+    suspend fun linkPhoneCredential(credential: AuthCredential): Result<CloudUser> =
+        runCatching {
+            val user = auth?.currentUser ?: error("Sign in from Settings before verifying your phone.")
+            val linkedUser = user.linkWithCredential(credential).await().user
+                ?: error("Firebase did not return the verified account.")
+            saveUserProfile(linkedUser)
+            linkedUser.toCloudUser()
+        }
 
     suspend fun signInWithGoogle(account: GoogleSignInAccount): Result<CloudUser> =
         runCatching {
@@ -93,11 +135,13 @@ class FirebaseCloudService(context: Context) {
                 "displayName" to user.displayName,
                 "email" to user.email,
                 "photoUrl" to user.photoUrl?.toString(),
+                "phoneNumber" to user.phoneNumber,
                 "lastLoginAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
             ),
             SetOptions.merge()
         )?.await()
     }
 
-    private fun FirebaseUser.toCloudUser() = CloudUser(uid, displayName, email, photoUrl?.toString())
+    private fun FirebaseUser.toCloudUser() =
+        CloudUser(uid, displayName, email, photoUrl?.toString(), phoneNumber)
 }

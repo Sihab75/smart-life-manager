@@ -1,8 +1,10 @@
 package com.example.personal_financestudydaily_routine_assistant
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.filled.*
@@ -53,10 +55,16 @@ fun StudyManagementScreen(vm: MainViewModel) {
             EmptyState("Create a course to organize topics, sessions, notes and revision.")
             Button(onClick = { dialog = "course" }, modifier = Modifier.fillMaxWidth()) { Text("Add your first course") }
         } else {
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                courses.take(3).forEachIndexed { index, course ->
-                    SegmentedButton(selected = course.id == selected?.id, onClick = { selectedId = course.id },
-                        shape = SegmentedButtonDefaults.itemShape(index, courses.take(3).size)) { Text(course.code, maxLines = 1) }
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                courses.forEach { course ->
+                    FilterChip(
+                        selected = course.id == selected?.id,
+                        onClick = { selectedId = course.id },
+                        label = { Text(course.code) }
+                    )
                 }
             }
             selected?.let { course ->
@@ -86,11 +94,7 @@ fun StudyManagementScreen(vm: MainViewModel) {
                         }
                     }
                     "Plan" -> {
-                        ActionButton("Generate AI study plan", Icons.Default.AutoAwesome, {
-                            topics.forEachIndexed { index, topic ->
-                                if (!topic.isCompleted) vm.addStudySession("Revision: ${topic.title}", 25)
-                            }
-                        }, Modifier.fillMaxWidth())
+                        Text("Check off each topic as you finish revising it.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text("Revision schedule", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         if (topics.isEmpty()) EmptyState("Add topics to generate a personalized plan.")
                         topics.forEachIndexed { index, topic ->
@@ -121,9 +125,9 @@ fun StudyManagementScreen(vm: MainViewModel) {
                         }
                     }
                     "Quiz" -> {
-                        Button(onClick = { generatedQuiz = true }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.AutoAwesome, null); Spacer(Modifier.width(8.dp)); Text("Generate quiz with AI") }
+                        Button(onClick = { generatedQuiz = true }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Quiz, null); Spacer(Modifier.width(8.dp)); Text("Build practice prompts") }
                         if (generatedQuiz) {
-                            Text("Practice quiz", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                            Text("Self-check prompts", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                             topics.take(5).forEachIndexed { index, topic ->
                                 ListCard { Column { Text("${index + 1}. Explain ${topic.title}.", fontWeight = FontWeight.Bold); Text("Write a short answer, then review it against your notes.") } }
                             }

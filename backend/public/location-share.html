@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#176b57">
+  <title>Location sharing consent · Smart Life Manager</title>
+  <link rel="stylesheet" href="/location-assets/location-share.css">
+  <script src="/location-assets/location-firebase.js" defer></script>
+  <script src="/location-assets/location-share.js" defer></script>
+</head>
+<body>
+  <main class="page">
+    <section class="card" aria-labelledby="title">
+      <div class="brand"><span class="pin" aria-hidden="true">⌖</span> Smart Life Manager</div>
+      <p class="eyebrow">PRIVATE LOCATION REQUEST</p>
+      <h1 id="title">Location sharing request</h1>
+      <p id="intro" class="intro">Someone is asking to see your current location. Your location is never requested until you choose to share.</p>
+
+      <div id="request-details" class="details" hidden>
+        <div class="detail"><span>Request from</span><strong id="requester-name"></strong></div>
+        <div class="detail"><span>Requested</span><strong id="request-time"></strong></div>
+        <div class="detail"><span>Request expires in</span><strong id="countdown"></strong></div>
+      </div>
+
+      <div id="notice" class="notice" role="status" aria-live="polite">Checking this request…</div>
+
+      <div id="phone-verification" class="controls" hidden>
+        <p class="privacy-copy">Verify that you received this request. Firebase will text a code to the phone number entered below. Verification does not share your location.</p>
+        <label class="field-label" for="recipient-phone">Your Bangladesh phone number</label>
+        <input id="recipient-phone" class="text-field" type="tel" autocomplete="tel" inputmode="tel" placeholder="+880 1XXXXXXXXX">
+        <div id="recaptcha-container"></div>
+        <button id="send-code-button" class="button primary" type="button">Send verification code</button>
+        <div id="verification-code-controls" hidden>
+          <label class="field-label" for="verification-code">SMS verification code</label>
+          <input id="verification-code" class="text-field" type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="10" placeholder="Enter the code">
+          <button id="verify-code-button" class="button secondary" type="button">Verify phone number</button>
+        </div>
+      </div>
+
+      <div id="consent-controls" class="controls" hidden>
+        <p class="privacy-copy">If you choose to share, this page will ask your browser for your current location. The requester can see your latest location and accuracy until the request expires (15 minutes), or until you stop sharing. Sharing updates only while this page is open and active; it may pause when the browser is closed or suspended.</p>
+        <p id="verified-phone-label" class="verified-label" hidden>Phone verified. Your location has not been accessed.</p>
+        <button id="share-button" class="button primary" type="button" hidden>Share my location</button>
+        <button id="decline-button" class="button secondary" type="button" hidden>Decline</button>
+      </div>
+
+      <div id="active-controls" class="controls" hidden>
+        <div class="active-label"><span aria-hidden="true"></span> Location sharing active</div>
+        <p id="active-copy" class="privacy-copy">Your latest location is being shared with the requester.</p>
+        <div class="details">
+          <div class="detail"><span>Last updated</span><strong id="last-updated">Waiting for location…</strong></div>
+          <div class="detail"><span>Accuracy</span><strong id="accuracy">Not available</strong></div>
+          <div class="detail"><span>Time remaining</span><strong id="active-countdown"></strong></div>
+        </div>
+        <button id="update-button" class="button primary" type="button" hidden>Update location</button>
+        <button id="stop-button" class="button secondary" type="button" hidden>Stop sharing</button>
+      </div>
+
+      <noscript>This consent page needs JavaScript enabled. No location is collected without your action.</noscript>
+      <p class="footer">Sharing is optional. Declining or closing this page does not share your location.</p>
+    </section>
+  </main>
+</body>
+</html>

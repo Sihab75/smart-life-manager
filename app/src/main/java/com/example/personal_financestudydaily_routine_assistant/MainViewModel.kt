@@ -633,4 +633,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val current = db.userSettingsDao().getUserSettingsDirect() ?: UserSettingsEntity()
         db.userSettingsDao().updateUserSettings(current.copy(isClassRepresentative = enabled))
     }
+
+    fun updateUserName(name: String) = viewModelScope.launch {
+        val normalizedName = name.trim()
+        require(normalizedName.isNotEmpty()) { "Your name cannot be blank." }
+        val current = db.userSettingsDao().getUserSettingsDirect() ?: UserSettingsEntity()
+        db.userSettingsDao().updateUserSettings(current.copy(userName = normalizedName))
+    }
+
+    fun setDarkModeOption(option: String) = viewModelScope.launch {
+        require(option in setOf("System", "Light", "Dark")) { "Choose System, Light, or Dark." }
+        val current = db.userSettingsDao().getUserSettingsDirect() ?: UserSettingsEntity()
+        db.userSettingsDao().updateUserSettings(current.copy(darkModeOption = option))
+    }
 }

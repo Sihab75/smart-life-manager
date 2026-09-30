@@ -1,7 +1,12 @@
 ﻿import "dotenv/config";
 import express from "express";
-import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";
+import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
+import { getMessaging } from "firebase-admin/messaging";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { createLocationConsentRouter, createLocationApiRouter } from "./location-sharing.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -56,17 +61,24 @@ app.use("/api", (req, res, next) => {
   return next();
 });
 
-function firebaseAdminAuth() {
+function firebaseAdminApp() {
   const projectId = process.env.FIREBASE_PROJECT_ID;
   if (!projectId) return null;
 
   const appName = "smart-life-manager-api";
-  const firebaseApp = getApps().find((candidate) => candidate.name === appName)
-    ?? initializeApp(
-      { credential: applicationDefault(), projectId },
-      appName
-    );
-  return getAuth(firebaseApp);
+  const existingApp = getApps().find((candidate) => candidate.name === appName);
+  if (existingApp) return existingApp;
+
+  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  const credential = serviceAccountJson
+    ? cert(JSON.parse(serviceAccountJson))
+    : applicationDefault();
+  return initializeApp({ credential, projectId }, appName);
+}
+
+function firebaseAdminAuth() {
+  const firebaseApp = firebaseAdminApp();
+  return firebaseApp ? getAuth(firebaseApp) : null;
 }
 
 async function requireFirebaseUser(req, res, next) {
@@ -95,7 +107,73 @@ async function requireFirebaseUser(req, res, next) {
   }
 }
 
+const backendDirectory = path.dirname(fileURLToPath(import.meta.url));
+const locationPageDirectory = path.resolve(backendDirectory, "../public");
+const locationPageCsp = [
+  "default-src 'self'",
+  "script-src 'self' https://www.gstatic.com https://www.google.com https://www.recaptcha.net",
+  "style-src 'self' 'unsafe-inline'",
+  "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firebaseinstallations.googleapis.com https://www.googleapis.com https://www.google.com https://www.recaptcha.net",
+  "img-src 'self' data: https://www.gstatic.com https://www.google.com",
+  "frame-src https://www.google.com https://recaptcha.google.com https://www.recaptcha.net",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'"
+].join("; ");
+let locationConsentRouter;
+let locationApiRouter;
+app.use("/location-assets", express.static(locationPageDirectory, {
+  index: false,
+  dotfiles: "deny",
+  maxAge: "5m",
+  setHeaders: (res, filePath) => {
+    res.set("X-Content-Type-Options", "nosniff");
+    res.set("Referrer-Policy", "no-referrer");
+    if (path.extname(filePath).toLowerCase() === ".html") {
+      res.set("Cache-Control", "no-store");
+      res.set("Content-Security-Policy", locationPageCsp);
+    }
+  }
+}));
+app.get("/location-share", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.set("Referrer-Policy", "no-referrer");
+  res.set("Content-Security-Policy", locationPageCsp);
+  res.sendFile(path.join(locationPageDirectory, "location-share.html"));
+});
+
+app.use("/api/location-consent", (req, res, next) => {
+  const firebaseApp = firebaseAdminApp();
+  if (!firebaseApp) {
+    return res.status(503).json({ error: "Location sharing is not configured" });
+  }
+  locationConsentRouter ??= createLocationConsentRouter(express, getFirestore(firebaseApp), {
+    auth: getAuth(firebaseApp),
+    phoneLookupSecret: process.env.PHONE_LOOKUP_HMAC_SECRET,
+    firebaseWebConfig: {
+      apiKey: process.env.PUBLIC_FIREBASE_API_KEY,
+      authDomain: process.env.PUBLIC_FIREBASE_AUTH_DOMAIN,
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      appId: process.env.PUBLIC_FIREBASE_APP_ID
+    }
+  });
+  return locationConsentRouter(req, res, next);
+});
+
 app.use("/api", requireFirebaseUser);
+app.use("/api/location", (req, res, next) => {
+  const firebaseApp = firebaseAdminApp();
+  if (!firebaseApp) {
+    return res.status(503).json({ error: "Location sharing is not configured" });
+  }
+  locationApiRouter ??= createLocationApiRouter(express, getFirestore(firebaseApp), {
+    publicBaseUrl: process.env.PUBLIC_BASE_URL,
+    phoneLookupSecret: process.env.PHONE_LOOKUP_HMAC_SECRET,
+    messaging: getMessaging(firebaseApp)
+  });
+  return locationApiRouter(req, res, next);
+});
 
 function normalizeProvider(provider) {
   return String(provider ?? "gemini").trim().toLowerCase();
